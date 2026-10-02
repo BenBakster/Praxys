@@ -38,20 +38,20 @@ export const Header: React.FC<HeaderProps> = ({
       id: 'gemini-2.5-flash',
       name: 'Google Gemini 2.5 Flash',
       badge: 'Основна',
-      desc: 'Основна клінічна модель Google, швидка та точна',
+      desc: 'Основна клінічна модель Google для структурування за Формою № 028/о',
     },
     {
       id: 'gemini-2.0-flash',
       name: 'Google Gemini 2.0 Flash',
       badge: 'Швидка',
-      desc: 'Додаткова швидка модель для миттєвого структурування',
+      desc: 'Швидка додаткова модель для миттєвої обробки стенограм',
     },
   ];
 
   return (
     <header className="no-print sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-gray-200/80 transition-all">
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-        {/* Brand & Doctor ID (No "психотерапевт") */}
+        {/* Brand & Doctor ID (Strictly no "психотерапевт") */}
         <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
             <span className="font-semibold text-lg tracking-tight">VP</span>
@@ -127,7 +127,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 text-[11px] border border-emerald-200/60">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Безпечна верифікація активна</span>
+            <span>Каскадний захист без збоїв</span>
           </div>
         </div>
 

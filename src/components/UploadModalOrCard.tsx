@@ -7,12 +7,29 @@ import {
   CheckCircle2,
   Sparkles,
   ArrowRight,
+  UserCheck,
+  ChevronDown,
+  ChevronUp,
+  Calendar,
+  User,
   FileText,
-  AlertCircle,
 } from 'lucide-react';
 
+export interface PatientContextData {
+  fullName?: string;
+  dob?: string;
+  pastHistory?: string;
+}
+
 interface UploadProps {
-  onProcessTranscript: (transcript: string, metadata?: any, formType?: string, rawJson?: any) => void;
+  onProcessTranscript: (
+    transcript: string,
+    metadata?: any,
+    formType?: string,
+    rawJson?: any,
+    doctorNotes?: string,
+    patientContext?: PatientContextData
+  ) => void;
   onLoadDemo: () => void;
   isProcessing: boolean;
 }
@@ -26,6 +43,14 @@ export const UploadCard: React.FC<UploadProps> = ({
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
   const [pasteText, setPasteText] = useState('');
   const [formType, setFormType] = useState('028_o');
+  const [doctorNotes, setDoctorNotes] = useState('');
+
+  // Patient Card & Prior History (Anamnesis Vitae)
+  const [patientFullName, setPatientFullName] = useState('');
+  const [patientDob, setPatientDob] = useState('');
+  const [patientPastHistory, setPatientPastHistory] = useState('');
+  const [showPatientCard, setShowPatientCard] = useState(true);
+
   const [lastUploadedInfo, setLastUploadedInfo] = useState<{
     fileName: string;
     utterancesCount: number;
@@ -33,6 +58,25 @@ export const UploadCard: React.FC<UploadProps> = ({
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const historyPresets = [
+    'Хронічні соматичні патології заперечує',
+    'ЧМТ та судомні напади заперечує',
+    'Алергологічний анамнез спокійний',
+    'Спадковий психіатричний анамнез не обтяжений',
+    'Попередній епізод тривожності 1-2 роки тому',
+    'Соматично обстежений (ЕКГ та щитоподібна залоза норма)',
+  ];
+
+  const addHistoryPreset = (preset: string) => {
+    setPatientPastHistory((prev) => (prev ? `${prev}; ${preset}` : preset));
+  };
+
+  const getPatientContext = (): PatientContextData => ({
+    fullName: patientFullName.trim() || undefined,
+    dob: patientDob.trim() || undefined,
+    pastHistory: patientPastHistory.trim() || undefined,
+  });
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -59,12 +103,13 @@ export const UploadCard: React.FC<UploadProps> = ({
     }
   };
 
-  // Robust Universal JSON & Text Parser
   const handleFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       const rawContent = event.target?.result as string;
       if (!rawContent) return;
+
+      const pContext = getPatientContext();
 
       try {
         const parsedJson = JSON.parse(rawContent);
@@ -82,15 +127,23 @@ export const UploadCard: React.FC<UploadProps> = ({
           date: extracted.date,
           participants: extracted.participants,
           fileSize: file.size,
+          doctorNotes,
         };
 
-        const transcriptText = extracted.dialogueLines.length > 0
-          ? extracted.dialogueLines.join('\n')
-          : rawContent;
+        const transcriptText =
+          extracted.dialogueLines.length > 0
+            ? extracted.dialogueLines.join('\n')
+            : rawContent;
 
-        onProcessTranscript(transcriptText, meta, formType, parsedJson);
+        onProcessTranscript(
+          transcriptText,
+          meta,
+          formType,
+          parsedJson,
+          doctorNotes,
+          pContext
+        );
       } catch {
-        // Plain text file (not JSON)
         const lines = rawContent.split('\n').filter(Boolean);
         setLastUploadedInfo({
           fileName: file.name,
@@ -99,39 +152,51 @@ export const UploadCard: React.FC<UploadProps> = ({
 
         onProcessTranscript(
           rawContent,
-          { fileName: file.name, date: new Date().toLocaleDateString('uk-UA') },
-          formType
+          {
+            fileName: file.name,
+            date: new Date().toLocaleDateString('uk-UA'),
+            doctorNotes,
+          },
+          formType,
+          undefined,
+          doctorNotes,
+          pContext
         );
       }
     };
     reader.readAsText(file);
   };
 
-  // Extract dialogue from any known JSON format
-  const parseAnyJson = (obj: any): { dialogueLines: string[]; title?: string; date?: string; participants?: string[] } => {
+  const parseAnyJson = (
+    obj: any
+  ): {
+    dialogueLines: string[];
+    title?: string;
+    date?: string;
+    participants?: string[];
+  } => {
     const dialogueLines: string[] = [];
-    let title = obj.title || obj.meeting_title || obj.data?.transcript?.title;
-    let date = obj.date || obj.date_string || obj.data?.transcript?.date;
-    let participants = obj.participants || obj.attendees || obj.speakers;
+    const title = obj.title || obj.meeting_title || obj.data?.transcript?.title;
+    const date = obj.date || obj.date_string || obj.data?.transcript?.date;
+    const participants = obj.participants || obj.attendees || obj.speakers;
 
-    // 1. Fireflies sentences
     if (Array.isArray(obj.sentences)) {
       for (const s of obj.sentences) {
         const speaker = s.speaker_name || s.speaker || 'Спікер';
         const txt = s.text || s.raw_text || '';
         if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
       }
-    }
-    // 2. Nested data.transcript.sentences
-    else if (obj.data && obj.data.transcript && Array.isArray(obj.data.transcript.sentences)) {
+    } else if (
+      obj.data &&
+      obj.data.transcript &&
+      Array.isArray(obj.data.transcript.sentences)
+    ) {
       for (const s of obj.data.transcript.sentences) {
         const speaker = s.speaker_name || s.speaker || 'Спікер';
         const txt = s.text || s.raw_text || '';
         if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
       }
-    }
-    // 3. Transcript array
-    else if (Array.isArray(obj.transcript)) {
+    } else if (Array.isArray(obj.transcript)) {
       for (const s of obj.transcript) {
         if (typeof s === 'string') {
           dialogueLines.push(s);
@@ -141,21 +206,18 @@ export const UploadCard: React.FC<UploadProps> = ({
           if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
         }
       }
-    }
-    // 4. Raw Array of turns
-    else if (Array.isArray(obj)) {
+    } else if (Array.isArray(obj)) {
       for (const s of obj) {
         if (typeof s === 'string') {
           dialogueLines.push(s);
         } else {
-          const speaker = s.speaker || s.speaker_name || s.role || 'Спікер';
+          const speaker =
+            s.speaker || s.speaker_name || s.name || s.role || 'Спікер';
           const txt = s.text || s.raw_text || s.content || '';
           if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
         }
       }
-    }
-    // 5. Utterances format
-    else if (Array.isArray(obj.utterances)) {
+    } else if (Array.isArray(obj.utterances)) {
       for (const s of obj.utterances) {
         const speaker = s.speaker || s.speaker_name || 'Спікер';
         const txt = s.text || s.content || '';
@@ -168,27 +230,34 @@ export const UploadCard: React.FC<UploadProps> = ({
 
   const handlePasteSubmit = () => {
     if (!pasteText.trim()) return;
-    onProcessTranscript(pasteText.trim(), { source: 'manual_paste' }, formType);
+    onProcessTranscript(
+      pasteText.trim(),
+      { source: 'manual_paste', doctorNotes },
+      formType,
+      undefined,
+      doctorNotes,
+      getPatientContext()
+    );
   };
 
   return (
     <div className="w-full max-w-4xl mx-auto my-6 px-4">
       {/* Hero Welcome Banner */}
-      <div className="text-center mb-8">
+      <div className="text-center mb-6">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200/80 text-blue-700 text-xs font-medium mb-3">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Пряме структурування прийому • Форма № 028/о МОЗ України</span>
+          <span>Клінічне структурування Форми № 028/о • Автоматичний розбір стенограм</span>
         </div>
         <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
           Студія клінічних висновків лікаря Віленчика А.П.
         </h2>
-        <p className="mt-2 text-sm text-gray-600 max-w-xl mx-auto leading-relaxed">
-          Перетягніть ваш реальний JSON-файл із Fireflies, Zoom або Whisper.
-          Система розпізнає справжнього пацієнта, виділить скарги та сформує висновок для друку або CamScanner.
+        <p className="mt-2 text-sm text-gray-600 max-w-2xl mx-auto leading-relaxed">
+          Завантажте файл зустрічі Fireflies / Google Meet або вставте текст.
+          Система формує офіційний Консультативний висновок за Наказом МОЗ № 110.
         </p>
       </div>
 
-      {/* Main Upload Box */}
+      {/* Main Container */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200/90 overflow-hidden transition-all">
         {/* Navigation Tabs & Form Switcher */}
         <div className="flex flex-col sm:flex-row items-center justify-between px-6 pt-4 pb-2 border-b border-gray-100 gap-3">
@@ -223,7 +292,7 @@ export const UploadCard: React.FC<UploadProps> = ({
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-gray-500 font-medium">Стандарт:</span>
+            <span className="text-gray-500 font-medium">Формат:</span>
             <select
               value={formType}
               onChange={(e) => setFormType(e.target.value)}
@@ -237,6 +306,93 @@ export const UploadCard: React.FC<UploadProps> = ({
 
         {/* Content Area */}
         <div className="p-6">
+          {/* 1. Patient Card & Past History (Anamnesis Vitae) Input */}
+          <div className="mb-5 border border-indigo-100 rounded-xl bg-indigo-50/20 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowPatientCard(!showPatientCard)}
+              className="w-full px-4 py-2.5 flex items-center justify-between text-left text-xs font-semibold text-indigo-950 hover:bg-indigo-50/50 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-indigo-600" />
+                <span>Дані пацієнта та попередній анамнез (опціонально)</span>
+              </div>
+              <div className="flex items-center gap-2 text-gray-400">
+                <span className="text-[11px] font-normal text-indigo-700">
+                  {patientFullName || patientDob ? 'Заповнено' : 'Розгорнути'}
+                </span>
+                {showPatientCard ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </div>
+            </button>
+
+            {showPatientCard && (
+              <div className="p-4 pt-2 space-y-3 border-t border-indigo-100/70 bg-white/70">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-700 mb-1 flex items-center gap-1.5">
+                      <User className="w-3 h-3 text-indigo-600" />
+                      ПІБ пацієнта (якщо відомо):
+                    </label>
+                    <input
+                      type="text"
+                      value={patientFullName}
+                      onChange={(e) => setPatientFullName(e.target.value)}
+                      placeholder="напр. Шевченко Андрій Олександрович"
+                      className="w-full p-2 rounded-lg border border-gray-200 bg-white text-xs text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-700 mb-1 flex items-center gap-1.5">
+                      <Calendar className="w-3 h-3 text-indigo-600" />
+                      Дата народження:
+                    </label>
+                    <input
+                      type="text"
+                      value={patientDob}
+                      onChange={(e) => setPatientDob(e.target.value)}
+                      placeholder="напр. 14.05.1990"
+                      className="w-full p-2 rounded-lg border border-gray-200 bg-white text-xs text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-gray-700 mb-1 flex items-center gap-1.5">
+                    <FileText className="w-3 h-3 text-indigo-600" />
+                    Попередній анамнез життя (для розділу 6 «Анамнез життя» / соматика / алергії):
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={patientPastHistory}
+                    onChange={(e) => setPatientPastHistory(e.target.value)}
+                    placeholder="Вкажіть особливості розвитку, перенесені захворювання, алергії чи примітки з минулих оглядів..."
+                    className="w-full p-2.5 rounded-lg border border-gray-200 bg-white text-xs text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                  {/* Quick Preset Chips for History */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <span className="text-[10px] text-gray-400 font-medium">Швидкі факти:</span>
+                    {historyPresets.map((preset, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => addHistoryPreset(preset)}
+                        className="text-[10px] px-2 py-0.5 rounded-md bg-white border border-indigo-200 text-indigo-800 hover:bg-indigo-50 transition-colors"
+                      >
+                        + {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 2. File Dropzone or Paste Box */}
           {activeTab === 'upload' ? (
             <div
               onDragEnter={handleDrag}
@@ -263,10 +419,10 @@ export const UploadCard: React.FC<UploadProps> = ({
               </div>
 
               <h4 className="text-sm font-semibold text-gray-900 mb-1">
-                Перетягніть сюди файл JSON консультації
+                Перетягніть сюди JSON або TXT файл консультації
               </h4>
               <p className="text-xs text-gray-500 max-w-sm mx-auto mb-4">
-                Підтримується повний експорт Fireflies.ai, Zoom, Whisper або структуровані транскрипти зустрічей
+                Підтримуються файли Fireflies.ai, Google Meet, Zoom, Whisper
               </p>
 
               <div className="inline-flex items-center gap-2">
@@ -290,7 +446,7 @@ export const UploadCard: React.FC<UploadProps> = ({
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
                 placeholder="Вставте сюди стенограму або текст бесіди лікаря з пацієнтом..."
-                rows={8}
+                rows={7}
                 className="w-full p-4 rounded-xl border border-gray-200 text-xs text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono"
               />
               <div className="flex justify-end">
@@ -299,7 +455,7 @@ export const UploadCard: React.FC<UploadProps> = ({
                   disabled={!pasteText.trim() || isProcessing}
                   className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-50"
                 >
-                  <span>Обробити консультацію</span>
+                  <span>Аналізувати та сформувати висновок</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -307,17 +463,17 @@ export const UploadCard: React.FC<UploadProps> = ({
           )}
 
           {/* Quick Demo Button */}
-          <div className="mt-6 pt-5 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 bg-blue-50/40 p-4 rounded-xl">
+          <div className="mt-5 pt-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 bg-gray-50/70 p-3.5 rounded-xl">
             <div className="flex items-center gap-3 text-left">
-              <div className="w-9 h-9 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-700 shrink-0">
-                <Play className="w-4 h-4 fill-blue-700" />
+              <div className="w-8 h-8 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-700 shrink-0">
+                <Play className="w-3.5 h-3.5 fill-blue-700" />
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-900">
                   Тестовий прийом (демо)
                 </p>
                 <p className="text-[11px] text-gray-500">
-                  Зразок заповнення форми на основі реалістичного кейсу тривожного розладу
+                  Зразок консультації з повним контекстом (F41.2, нічні пароксизми, соматичне обстеження)
                 </p>
               </div>
             </div>
@@ -325,7 +481,7 @@ export const UploadCard: React.FC<UploadProps> = ({
             <button
               onClick={onLoadDemo}
               disabled={isProcessing}
-              className="w-full sm:w-auto px-4 py-2 rounded-lg bg-white border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold shadow-2xs transition-all shrink-0 active:scale-95"
+              className="w-full sm:w-auto px-4 py-2 rounded-lg bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold shadow-2xs transition-all shrink-0 active:scale-95"
             >
               Завантажити зразок
             </button>
@@ -336,15 +492,15 @@ export const UploadCard: React.FC<UploadProps> = ({
         <div className="bg-gray-50/70 px-6 py-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-gray-600">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span>Аналіз реальних даних без сторонніх шаблонів</span>
+            <span>Інтерактивний довідник МКХ-10</span>
           </div>
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <span>Чистий аркуш для CamScanner (тільки М. П.)</span>
+            <span>Чистий бланк А4 та CamScanner (тільки М. П.)</span>
           </div>
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-            <span>Пряма обробка Gemini 3.8 / 3.1</span>
+            <span>Пряма відправка DOCX у Telegram лікаря</span>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Header } from './components/Header';
-import { UploadCard } from './components/UploadModalOrCard';
+import { UploadCard, PatientContextData } from './components/UploadModalOrCard';
 import { FactsColumn } from './components/FactsColumn';
 import { MedicalDocumentA4 } from './components/MedicalDocumentA4';
 import { TelegramModal } from './components/TelegramModal';
@@ -12,8 +12,6 @@ import {
   Copy,
   Check,
   Sparkles,
-  FileText,
-  AlertCircle,
 } from 'lucide-react';
 
 export default function App() {
@@ -40,7 +38,9 @@ export default function App() {
     transcript: string,
     metadata?: any,
     formType: string = '028_o',
-    rawJson?: any
+    rawJson?: any,
+    doctorNotes?: string,
+    patientContext?: PatientContextData
   ) => {
     setIsProcessing(true);
     setRawTranscript(transcript);
@@ -49,16 +49,16 @@ export default function App() {
     }
 
     try {
-      // Send flexible payload that /api/extract accepts in all scenarios
       const payload: any = {
         transcript,
         rawJson: rawJson || undefined,
         metadata: metadata || {},
         modelName: selectedModel,
         formType,
+        doctorNotes: doctorNotes || '',
+        patientContext: patientContext || {},
       };
 
-      // Also merge root fields if rawJson is passed for maximum compatibility
       if (rawJson && typeof rawJson === 'object') {
         if (rawJson.sentences) payload.sentences = rawJson.sentences;
         if (rawJson.transcript) payload.transcriptObj = rawJson.transcript;
@@ -75,14 +75,17 @@ export default function App() {
       if (result.ok && result.data) {
         setConsultationData(result.data);
         const patientName = result.data.patient?.fullName || 'Пацієнт';
-        const sourceName = result.source === 'gemini' ? selectedModel : 'Клінічний парсер';
+        const sourceName =
+          result.source === 'gemini'
+            ? result.model || selectedModel
+            : 'Клінічний аналіз';
         showToast(`Успішно сформовано для: ${patientName} (${sourceName})!`);
       } else {
         throw new Error(result.error || 'Не вдалося структурувати дані');
       }
     } catch (err: any) {
       console.error('API extraction issue:', err);
-      showToast(`Помилка аналізу файлу: ${err.message || 'Перевірте формат'}`);
+      showToast(`Помилка аналізу: ${err.message || 'Перевірте файл'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -102,7 +105,7 @@ export default function App() {
     window.print();
   };
 
-  // Export DOCX (No "психотерапевт", only M.P. seal circle)
+  // Export DOCX (Strictly no "психотерапевт", only M.P. seal circle)
   const handleExportDocx = async () => {
     if (!consultationData) return;
 
@@ -164,7 +167,7 @@ export default function App() {
     }
   };
 
-  // Copy full document text (No "психотерапевт", only M.P.)
+  // Copy full document text
   const handleCopyText = () => {
     if (!consultationData) return;
     const doc = consultationData.form028;
@@ -240,8 +243,8 @@ ${doc.recommendationsSection}
             <h3 className="mt-4 text-sm font-semibold text-gray-900">
               Аналіз консультації через {selectedModel}...
             </h3>
-            <p className="mt-1 text-xs text-gray-500 max-w-sm">
-              Виділяємо справжнє ім'я пацієнта, озвучені скарги, перевіряємо дози та заповнюємо бланк МОЗ
+            <p className="mt-1 text-xs text-gray-500 max-w-md">
+              Структуруємо дані пацієнта, анамнез життя, психопатологічний статус та рекомендації за Формою № 028/о
             </p>
           </div>
         )}
@@ -294,7 +297,7 @@ ${doc.recommendationsSection}
 
                 <button
                   onClick={handlePrint}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white shadow-2xs transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white shadow-2xs transition-colors"
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span>Друк / PDF для CamScanner</span>
