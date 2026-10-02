@@ -1,20 +1,34 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Form028Data, PatientInfo } from '../types/clinical';
+import { Form028Data, PatientInfo, FormType } from '../types/clinical';
 import { ICD10_PSYCHIATRY_LIST, ICD10Diagnosis } from '../data/icd10Data';
-import { Edit3, Search, ChevronDown, Check, X, BookOpen } from 'lucide-react';
+import {
+  Edit3,
+  Search,
+  ChevronDown,
+  Check,
+  X,
+  BookOpen,
+  FileText,
+  Video,
+  FileCheck2,
+} from 'lucide-react';
 
 interface DocumentProps {
   form028: Form028Data;
   patient: PatientInfo;
+  formType: FormType;
   onUpdateForm: (updated: Partial<Form028Data>) => void;
   onUpdatePatient: (updated: Partial<PatientInfo>) => void;
+  onSelectFormType: (type: FormType) => void;
 }
 
 export const MedicalDocumentA4: React.FC<DocumentProps> = ({
   form028,
   patient,
+  formType,
   onUpdateForm,
   onUpdatePatient,
+  onSelectFormType,
 }) => {
   const [icdDropdownOpen, setIcdDropdownOpen] = useState(false);
   const [icdSearchQuery, setIcdSearchQuery] = useState('');
@@ -54,26 +68,83 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
 
   return (
     <div className="print-container flex flex-col items-center w-full">
-      {/* Visual Instruction Badge for Doctor */}
-      <div className="no-print w-full max-w-[210mm] mb-3 flex items-center justify-between px-3 py-2 bg-blue-50/70 border border-blue-100 rounded-lg text-xs text-blue-900">
-        <div className="flex items-center gap-2">
+      {/* Top Interactive Toolbar & Form Switcher */}
+      <div className="no-print w-full max-w-[210mm] mb-3 flex flex-col sm:flex-row items-center justify-between gap-2.5 px-3.5 py-2.5 bg-white border border-gray-200/90 rounded-xl shadow-2xs">
+        <div className="flex items-center gap-2 text-xs text-gray-700">
           <Edit3 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
           <span>
-            <strong>Інтерактивний лист А4:</strong> клікніть у будь-яке поле чи діагноз нижче для миттєвого редагування або вибору з довідника МКХ-10.
+            <strong>Формат документа:</strong> оберіть затверджений стандарт МОЗ України
           </span>
         </div>
-        <span className="text-[11px] font-medium text-blue-700 bg-white px-2 py-0.5 rounded shadow-2xs shrink-0">
-          Форма № 028/о МОЗ
-        </span>
+
+        {/* 3-Form Switcher Segment */}
+        <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100/70 p-0.5">
+          <button
+            type="button"
+            onClick={() => onSelectFormType('028_o')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+              formType === '028_o'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <FileText className="w-3 h-3" />
+            <span>028/о (Консультативний)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectFormType('002_tm')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+              formType === '002_tm'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Video className="w-3 h-3" />
+            <span>002/тм (Телемедицина)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectFormType('027_o')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+              formType === '027_o'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <FileCheck2 className="w-3 h-3" />
+            <span>027/о (Виписка)</span>
+          </button>
+        </div>
       </div>
 
       {/* A4 Sheet Container */}
       <div className="medical-document-page bg-white w-full max-w-[210mm] min-h-[297mm] p-8 sm:p-12 border border-gray-200 rounded-none sm:rounded-sm text-gray-900 text-[12pt] leading-normal transition-all shadow-md">
         {/* MOH Ukraine Form Designation (Upper Right) */}
         <div className="text-right text-[9pt] leading-tight text-gray-600 italic mb-4 font-serif avoid-break">
-          <div>Форма первинної облікової документації № 028/о</div>
-          <div>ЗАТВЕРДЖЕНО</div>
-          <div>Наказ МОЗ України 14.02.2012 № 110</div>
+          {formType === '028_o' && (
+            <>
+              <div>Форма первинної облікової документації № 028/о</div>
+              <div>ЗАТВЕРДЖЕНО</div>
+              <div>Наказ МОЗ України 14.02.2012 № 110</div>
+            </>
+          )}
+          {formType === '002_tm' && (
+            <>
+              <div>Форма первинної облікової документації № 002/тм</div>
+              <div>ЗАТВЕРДЖЕНО</div>
+              <div>Наказ МОЗ України 19.10.2015 № 681</div>
+            </>
+          )}
+          {formType === '027_o' && (
+            <>
+              <div>Форма первинної облікової документації № 027/о</div>
+              <div>ЗАТВЕРДЖЕНО</div>
+              <div>Наказ МОЗ України 14.02.2012 № 110</div>
+            </>
+          )}
         </div>
 
         {/* Doctor & Practice Header (Strictly no "психотерапевт") */}
@@ -92,11 +163,14 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
           </div>
         </div>
 
-        {/* Title */}
+        {/* Document Title According to Selected Form */}
         <div className="text-center my-4 font-serif avoid-break">
-          <h2 className="text-[15pt] font-bold tracking-tight uppercase">
-            КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА
+          <h2 className="text-[14pt] font-bold tracking-tight uppercase">
+            {formType === '028_o' && 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА'}
+            {formType === '002_tm' && 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)'}
+            {formType === '027_o' && 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО (СТАЦІОНАРНОГО) ХВОРОГО'}
           </h2>
+
           <div className="text-[11pt] font-semibold text-gray-800 mt-1 flex items-center justify-center gap-2">
             <span>№</span>
             <input
@@ -115,12 +189,29 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
           </div>
         </div>
 
-        {/* Clinical Document Content Sections */}
+        {/* Dynamic Form Sections */}
         <div className="space-y-4 font-serif text-[11pt] text-justify leading-relaxed">
+          {/* Specific Recipient Field for Form 027/о */}
+          {formType === '027_o' && (
+            <div className="avoid-break bg-gray-50/60 p-2.5 rounded border border-gray-200">
+              <div className="flex flex-wrap items-baseline gap-1">
+                <span className="font-bold">В (найменування закладу / за місцем вимоги):</span>
+                <input
+                  type="text"
+                  value={form028.extractRecipient || 'За місцем вимоги / Сімейному лікарю / ВЛК'}
+                  onChange={(e) => onUpdateForm({ extractRecipient: e.target.value })}
+                  className="flex-1 font-semibold border-b border-dashed border-gray-400 hover:border-gray-800 focus:border-blue-600 outline-none bg-transparent px-1"
+                />
+              </div>
+            </div>
+          )}
+
           {/* 1. Patient Info */}
           <div className="avoid-break">
             <div className="flex flex-wrap items-baseline gap-1">
-              <span className="font-bold">1. Прізвище, ім'я, по батькові пацієнта:</span>
+              <span className="font-bold">
+                {formType === '027_o' ? '1. Прізвище, ім\'я, по батькові хворого:' : '1. Прізвище, ім\'я, по батькові пацієнта:'}
+              </span>
               <input
                 type="text"
                 value={patient.fullName}
@@ -130,7 +221,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             </div>
           </div>
 
-          {/* 2. Age / Date of Birth & 3. Consultation Type */}
+          {/* 2. Age / Date of Birth & Consultation Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 avoid-break">
             <div className="flex items-baseline gap-1">
               <span className="font-bold">2. Вік / дата народження:</span>
@@ -138,24 +229,65 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                 type="text"
                 value={patient.age}
                 onChange={(e) => onUpdatePatient({ age: e.target.value })}
-                placeholder="напр. 34 роки (14.05.1990)"
+                placeholder="напр. 38 років (15.08.1988)"
                 className="flex-1 border-b border-dashed border-gray-300 hover:border-gray-800 focus:border-blue-600 outline-none bg-transparent px-1"
               />
             </div>
+
             <div className="flex items-baseline gap-1">
-              <span className="font-bold">3. Вид консультації:</span>
+              <span className="font-bold">
+                {formType === '027_o' ? '3. Період нагляду / лікування:' : '3. Вид консультації:'}
+              </span>
               <input
                 type="text"
-                value={patient.consultationType}
-                onChange={(e) => onUpdatePatient({ consultationType: e.target.value })}
+                value={
+                  formType === '027_o'
+                    ? form028.treatmentPeriod || `Консультація від ${patient.consultationDate}`
+                    : formType === '002_tm'
+                    ? 'Телемедичне консультування (відеозв\'язок)'
+                    : patient.consultationType
+                }
+                onChange={(e) => {
+                  if (formType === '027_o') {
+                    onUpdateForm({ treatmentPeriod: e.target.value });
+                  } else {
+                    onUpdatePatient({ consultationType: e.target.value });
+                  }
+                }}
                 className="flex-1 border-b border-dashed border-gray-300 hover:border-gray-800 focus:border-blue-600 outline-none bg-transparent px-1"
               />
             </div>
           </div>
 
+          {/* Specific Telemedicine parameters for Form 002/тм */}
+          {formType === '002_tm' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 avoid-break bg-blue-50/30 p-2 rounded border border-blue-100">
+              <div className="flex items-baseline gap-1">
+                <span className="font-bold text-[10pt]">Тривалість сеансу:</span>
+                <input
+                  type="text"
+                  value={form028.telemedDuration || '45 хвилин'}
+                  onChange={(e) => onUpdateForm({ telemedDuration: e.target.value })}
+                  className="flex-1 border-b border-dashed border-gray-300 outline-none bg-transparent px-1 text-[10pt]"
+                />
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className="font-bold text-[10pt]">Засіб зв'язку:</span>
+                <input
+                  type="text"
+                  value={form028.telemedChannel || 'Захищений відеоконференцзв\'язок'}
+                  onChange={(e) => onUpdateForm({ telemedChannel: e.target.value })}
+                  className="flex-1 border-b border-dashed border-gray-300 outline-none bg-transparent px-1 text-[10pt]"
+                />
+              </div>
+            </div>
+          )}
+
           {/* 4. Complaints */}
           <div className="avoid-break">
-            <span className="font-bold block mb-1">4. Скарги хворого:</span>
+            <span className="font-bold block mb-1">
+              {formType === '027_o' ? '4. Скарги при зверненні:' : '4. Скарги хворого:'}
+            </span>
             <textarea
               rows={3}
               value={form028.complaintsSection}
@@ -164,9 +296,11 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             />
           </div>
 
-          {/* 5. Anamnesis Morbi */}
+          {/* 5. Anamnesis Morbi (incorporating dynamics if follow-up) */}
           <div className="avoid-break">
-            <span className="font-bold block mb-1">5. Анамнез захворювання:</span>
+            <span className="font-bold block mb-1">
+              {formType === '027_o' ? '5. Короткий анамнез та перебіг захворювання (динаміка):' : '5. Анамнез захворювання:'}
+            </span>
             <textarea
               rows={4}
               value={form028.anamnesisMorbiSection}
@@ -175,22 +309,21 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             />
           </div>
 
-          {/* 6. Anamnesis Vitae (Past medical history) */}
+          {/* 6. Anamnesis Vitae */}
           <div className="avoid-break">
             <span className="font-bold block mb-1">6. Анамнез життя:</span>
             <textarea
               rows={3}
               value={form028.anamnesisVitaeSection}
               onChange={(e) => onUpdateForm({ anamnesisVitaeSection: e.target.value })}
-              placeholder="Розвиток, перенесені захворювання, алергологічний анамнез, примітки попередніх оглядів..."
               className="w-full p-2 border border-gray-200/60 hover:border-gray-400 focus:border-blue-600 rounded bg-transparent outline-none resize-y leading-relaxed font-serif text-[11pt]"
             />
           </div>
 
-          {/* 7. Objective Status */}
+          {/* 7. Objective Status (including psychometrics) */}
           <div className="avoid-break">
             <span className="font-bold block mb-1">
-              7. Дані об'єктивного обстеження (соматичний та психічний статус):
+              7. Дані об'єктивного обстеження (психічний, соматичний статус та психометрія):
             </span>
             <textarea
               rows={5}
@@ -213,7 +346,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             />
           </div>
 
-          {/* 9. Diagnosis with Interactive Autocomplete Dropdown */}
+          {/* 9. Diagnosis with Autocomplete Dropdown */}
           <div className="p-3 bg-gray-50/70 border-l-4 border-gray-900 rounded-r avoid-break relative" ref={dropdownRef}>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
               <div className="flex items-baseline gap-2">
@@ -256,7 +389,6 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             {/* Interactive Searchable Dropdown Popover */}
             {icdDropdownOpen && (
               <div className="no-print absolute left-0 right-0 top-full mt-1 z-50 bg-white rounded-xl shadow-2xl border border-gray-200 font-sans text-xs overflow-hidden max-h-96 flex flex-col">
-                {/* Search Bar */}
                 <div className="p-2.5 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
                   <Search className="w-4 h-4 text-gray-400 shrink-0" />
                   <input
@@ -264,7 +396,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                     type="text"
                     value={icdSearchQuery}
                     onChange={(e) => setIcdSearchQuery(e.target.value)}
-                    placeholder="Пошук за кодом або назвою (напр. F41, тривожний, депресивний, безсоння, алкоголь)..."
+                    placeholder="Пошук за кодом або назвою (F41, тривожний, депресивний, безсоння, алкоголь)..."
                     className="w-full bg-transparent outline-none text-xs text-gray-800 placeholder-gray-400"
                   />
                   {icdSearchQuery && (
@@ -277,7 +409,6 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                   )}
                 </div>
 
-                {/* Diagnosis List */}
                 <div className="overflow-y-auto divide-y divide-gray-50 p-1 flex-1">
                   {filteredICD.length === 0 ? (
                     <div className="py-6 text-center text-gray-400 text-xs">
@@ -316,7 +447,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                 </div>
 
                 <div className="p-2 border-t border-gray-100 bg-gray-50/70 text-[10px] text-gray-500 text-right">
-                  Оберіть рядок для автоматичного заповнення або закрийте вікно
+                  Оберіть рядок для автоматичного заповнення
                 </div>
               </div>
             )}
@@ -324,7 +455,9 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
 
           {/* 10. Recommendations */}
           <div className="avoid-break">
-            <span className="font-bold block mb-1">10. Рекомендації:</span>
+            <span className="font-bold block mb-1">
+              {formType === '027_o' ? '10. Лікувальні та трудові рекомендації:' : '10. Рекомендації:'}
+            </span>
             <textarea
               rows={6}
               value={form028.recommendationsSection}
@@ -345,7 +478,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
               />
             </div>
             <div className="flex items-baseline gap-1">
-              <span className="font-bold">12. Повторна явка:</span>
+              <span className="font-bold">12. Повторна явка / контроль:</span>
               <input
                 type="text"
                 value={form028.nextAppointmentDate}

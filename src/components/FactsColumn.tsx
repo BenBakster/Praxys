@@ -12,6 +12,8 @@ import {
   ChevronUp,
   FileText,
   UserCheck,
+  Activity,
+  Repeat,
 } from 'lucide-react';
 import { ClinicalFacts, PatientInfo } from '../types/clinical';
 
@@ -49,6 +51,32 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Psychometrics Card (if provided) */}
+      {facts.psychometrics && (
+        <div className="bg-purple-50/60 rounded-xl p-3.5 border border-purple-200/80 shadow-2xs">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Activity className="w-4 h-4 text-purple-600" />
+            <h4 className="text-xs font-semibold text-purple-950">Психометричні тести (шкали)</h4>
+          </div>
+          <p className="text-xs text-purple-900 leading-relaxed font-medium">
+            {facts.psychometrics}
+          </p>
+        </div>
+      )}
+
+      {/* Follow-up Dynamics Card (if provided) */}
+      {facts.followUpDynamics && (
+        <div className="bg-sky-50/60 rounded-xl p-3.5 border border-sky-200/80 shadow-2xs">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Repeat className="w-4 h-4 text-sky-600" />
+            <h4 className="text-xs font-semibold text-sky-950">Динаміка повторного прийому</h4>
+          </div>
+          <p className="text-xs text-sky-900 leading-relaxed">
+            {facts.followUpDynamics}
+          </p>
+        </div>
+      )}
 
       {/* Anti-Hallucination Safe Shield */}
       <div className="bg-gradient-to-r from-emerald-50/80 to-blue-50/50 rounded-xl p-3 border border-emerald-200/70 text-emerald-900 text-xs">

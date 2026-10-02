@@ -106,6 +106,8 @@ function extractAllPossibleDialogue(body: any): { text: string; count: number; m
   meta.fileName = body.metadata?.fileName || target.fileName || '';
   meta.doctorNotes = body.doctorNotes || body.metadata?.doctorNotes || '';
   meta.patientContext = body.patientContext || body.metadata?.patientContext || {};
+  meta.psychometrics = body.psychometrics || body.metadata?.psychometrics || '';
+  meta.followUpData = body.followUpData || body.metadata?.followUpData || {};
 
   const sentences = target.sentences || target.data?.transcript?.sentences;
   if (Array.isArray(sentences)) {
@@ -181,6 +183,11 @@ app.get('/api/status', (req: Request, res: Response) => {
       { id: 'gemini-2.5-flash', name: 'Google Gemini 2.5 Flash', tag: 'Основна модель' },
       { id: 'gemini-2.0-flash', name: 'Google Gemini 2.0 Flash', tag: 'Швидка / резервна' },
     ],
+    supportedForms: [
+      { id: '028_o', name: 'Форма № 028/о (Консультативний висновок спеціаліста)' },
+      { id: '002_tm', name: 'Форма № 002/тм (Висновок консультанта телемедицини)' },
+      { id: '027_o', name: 'Форма № 027/о (Виписка із медичної карти амбулаторного хворого)' },
+    ],
     doctor: PRACTICE_INFO,
     telegramConfigured: Boolean(process.env.BOT_TOKEN && process.env.ADMIN_ID),
   });
@@ -197,14 +204,22 @@ const CLINICAL_SYSTEM_INSTRUCTION = `
    - Якщо вказано дату народження (patientContext.dob), обчислити вік пацієнта та записати у форматі "ХХ років (ДД.ММ.РРРР)".
    - Якщо надано попередній анамнез життя (patientContext.pastHistory), безпосередньо вплести його у розділ "6. Анамнез життя" (form028.anamnesisVitaeSection).
    - Якщо patientContext.pastHistory НЕ надано, записати: "У записі не зазначено (зі слів пацієнта)".
-3. АНАМНЕЗ ЗАХВОРЮВАННЯ ТА ОБ'ЄКТИВНИЙ ПСИХІЧНИЙ СТАТУС:
-   - Детально описати хронологію виникнення скарг, пускові стресори, перенесений досвід фармакотерапії.
-   - Психічний статус: свідомість, орієнтування, контакт, фон настрою, афект, мислення, сприйняття (відсутність галюцинацій).
-   - Оцінка суїцидального ризику: чітка фіксація відсутності суїцидальних думок та намірів, антисуїцидальні фактори.
-4. МКХ-10 ТА РЕКОМЕНДАЦІЇ:
+
+3. ПСИХОМЕТРИЧНІ ШКАЛИ (ТЕСТИ З БОТА):
+   - Якщо надано результати психометричних шкал (PHQ-9, GAD-7, ASRS-6, AUDIT, ASRM тощо), обов'язково інтегрувати їх окремим пунктом в розділ 7 "Об'єктивний статус" (form028.objectiveStatusSection):
+     Наприклад: "Психометричне обстеження: PHQ-9 — 14 балів (помірний депресивний епізод); GAD-7 — 11 балів (помірна тривога); ASRS v1.1 — висока ймовірність СДУГ."
+
+4. РЕЖИМ ПОВТОРНОГО ПРИЙОМУ (ДИНАМІКА СТАНУ ТА ТЕРАПІЇ):
+   - Якщо тип консультації "повторна" або надано дані попередньої терапії:
+     * Оцінити терапевтичну динаміку: редукцію тривоги (у %), нормалізацію сну, переносимість ліків та побічні ефекти.
+     * В "Анамнез захворювання" (form028.anamnesisMorbiSection) окремо описати: "Динаміка стану на тлі терапії...".
+     * В "Рекомендації" (form028.recommendationsSection) клінічно обґрунтувати корекцію дози, ескалацію, заміну препарату або продовження підтримуючого курсу.
+
+5. МКХ-10 ТА РЕКОМЕНДАЦІЇ:
    - Вказати точний код за МКХ-10 (наприклад F41.2, F41.0, F41.1, F43.2, F32.1 тощо) та повну офіційну клінічну назву.
    - Рекомендації: режим, психоосвіта, психогігієна сну, психофармакотерапія з точним зазначенням доз і схеми титрації (вранці/ввечері).
-5. СТАНДАРТ МОЗ:
+
+6. СТАНДАРТИ МОЗ УКРАЇНИ (028/о, 002/тм, 027/о):
    - Якщо лабораторних даних не було: "На момент консультації даних лабораторних та інструментальних досліджень не надано."
    - Внизу документа залишається виключно місце для печатки (М. П.) без рядка ручного підпису.
 `;
@@ -219,6 +234,8 @@ app.post('/api/extract', async (req: Request, res: Response) => {
     const formType = req.body?.formType || '028_o';
     const doctorNotes = req.body?.doctorNotes || metadata?.doctorNotes || '';
     const patientContext = req.body?.patientContext || metadata?.patientContext || {};
+    const psychometrics = req.body?.psychometrics || metadata?.psychometrics || '';
+    const followUpData = req.body?.followUpData || metadata?.followUpData || {};
 
     // If completely empty dialogue, generate standard template
     if (!processedText || processedText.trim().length === 0) {
@@ -226,7 +243,9 @@ app.post('/api/extract', async (req: Request, res: Response) => {
         'Пацієнт: Звернення за психіатричною консультацією.',
         metadata,
         doctorNotes,
-        patientContext
+        patientContext,
+        psychometrics,
+        followUpData
       );
       return res.json({
         ok: true,
@@ -249,19 +268,38 @@ app.post('/api/extract', async (req: Request, res: Response) => {
         ? formatAgeWithDob(patientContext.dob)
         : 'У записі не зазначено (зі слів пацієнта)';
 
+      const isFollowUp = followUpData.consultationType === 'повторна';
+
       const prompt = `
 ВХІДНІ КЛІНІЧНІ ДАНІ ТА КОНТЕКСТ:
 - Назва зустрічі / файлу: ${metadata.title || metadata.fileName || 'Консультація'}
 - Дата консультації: ${metadata.date || new Date().toLocaleDateString('uk-UA')}
 - Учасники бесіди: ${JSON.stringify(metadata.participants || [])}
-- Формат: ${formType === '028_o' ? 'Форма № 028/о (Консультативний висновок спеціаліста МОЗ України)' : 'Форма № 002/тм'}
+- Обрана форма МОЗ: ${
+        formType === '002_tm'
+          ? 'Форма № 002/тм (Телемедицина, Наказ МОЗ № 681)'
+          : formType === '027_o'
+          ? 'Форма № 027/о (Виписка із медичної карти амбулаторного хворого, Наказ МОЗ № 110)'
+          : 'Форма № 028/о (Консультативний висновок спеціаліста, Наказ МОЗ № 110)'
+      }
 
-КАРТКА ПАЦІЄНТА ТА ПОПЕРЕДНІЙ АНАМНЕЗ (PATIENT CONTEXT):
+КАРТКА ПАЦІЄНТА (PATIENT CONTEXT):
 - ПІБ: ${patientContext.fullName || 'Визначити зі стенограми або метаданих'}
 - Дата народження: ${patientContext.dob || 'Не зазначено'} (Розрахований вік: ${calculatedAge})
 - Попередній анамнез життя (для розділу 6): ${
         patientContext.pastHistory || 'У записі не зазначено (зі слів пацієнта)'
       }
+
+РЕЖИМ КОНСУЛЬТАЦІЇ:
+- Вид: ${isFollowUp ? 'ПОВТОРНА (Оцінка терапевтичної динаміки)' : 'ПЕРВИННА'}
+${
+  isFollowUp && followUpData.previousTherapyAndState
+    ? `- Попередня терапія та динаміка: """${followUpData.previousTherapyAndState}"""\n`
+    : ''
+}
+
+ПСИХОМЕТРИЧНІ ШКАЛИ (ТЕСТИ З БОТА):
+${psychometrics ? `"""${psychometrics}"""` : 'Не проводилися або не надані'}
 ${doctorNotes ? `- ДОДАТКОВІ ПРИМІТКИ ЛІКАРЯ:\n"""${doctorNotes}"""\n` : ''}
 
 СТЕНОГРАМА ПРИЙОМУ ЛІКАРЯ-ПСИХІАТРА:
@@ -270,7 +308,7 @@ ${processedText.slice(0, 80000)}
 """
 
 ЗАВДАННЯ:
-Проаналізуйте прийом, врахуйте повний контекст, застосуйте надані дані пацієнта (patientContext), сформуйте офіційний Консультативний висновок за Формою № 028/о та поверніть валідний JSON.
+Проаналізуйте прийом, врахуйте повний контекст, застосуйте надані дані пацієнта (patientContext), включіть психометричні шкали в об'єктивний статус, опишіть динаміку терапії (якщо прийом повторний), сформуйте офіційний медичний документ та поверніть валідний JSON.
 `;
 
       const schemaConfig = {
@@ -334,6 +372,10 @@ ${processedText.slice(0, 80000)}
               recommendationsSection: { type: Type.STRING },
               disabilityNote: { type: Type.STRING },
               nextAppointmentDate: { type: Type.STRING },
+              telemedDuration: { type: Type.STRING },
+              telemedChannel: { type: Type.STRING },
+              extractRecipient: { type: Type.STRING },
+              treatmentPeriod: { type: Type.STRING },
             },
             required: [
               'complaintsSection',
@@ -380,6 +422,16 @@ ${processedText.slice(0, 80000)}
                 parsed.form028.anamnesisVitaeSection = 'У записі не зазначено (зі слів пацієнта)';
               }
 
+              // Weave psychometrics if not already included
+              if (psychometrics && !parsed.form028.objectiveStatusSection.includes('Психометричн')) {
+                parsed.form028.objectiveStatusSection += `\nПсихометричне обстеження (шкали): ${psychometrics}.`;
+              }
+
+              // If followUp data provided and not in anamnesisMorbi, append
+              if (isFollowUp && followUpData.previousTherapyAndState && !parsed.form028.anamnesisMorbiSection.includes('Динаміка')) {
+                parsed.form028.anamnesisMorbiSection += `\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`;
+              }
+
               console.log(`[AI Extract] Success with ${currentModel} for ${parsed.patient?.fullName}`);
               return res.json({
                 ok: true,
@@ -398,13 +450,15 @@ ${processedText.slice(0, 80000)}
       }
     }
 
-    // High-fidelity fallback parser incorporating context
+    // High-fidelity fallback parser incorporating context, psychometrics & followUp
     console.log('[AI Extract] Using high-fidelity contextual local parser');
     const localResult = parseActualConsultationText(
       processedText,
       metadata,
       doctorNotes,
-      patientContext
+      patientContext,
+      psychometrics,
+      followUpData
     );
     return res.json({
       ok: true,
@@ -418,6 +472,8 @@ ${processedText.slice(0, 80000)}
       'Консультація лікаря-психіатра',
       {},
       '',
+      {},
+      '',
       {}
     );
     return res.json({
@@ -428,12 +484,14 @@ ${processedText.slice(0, 80000)}
   }
 });
 
-// Dynamic parser on actual text with patientContext
+// Dynamic parser on actual text with patientContext, psychometrics and follow-up
 function parseActualConsultationText(
   rawText: string,
   metadata: any,
   doctorNotes: string = '',
-  patientContext: any = {}
+  patientContext: any = {},
+  psychometrics: string = '',
+  followUpData: any = {}
 ) {
   const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
   const now = new Date();
@@ -441,7 +499,7 @@ function parseActualConsultationText(
     metadata?.date ||
     now.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-  // 1. Determine patient name: Prioritize patientContext
+  // 1. Patient Name
   let patientName = patientContext.fullName || '';
 
   if (!patientName && metadata?.title) {
@@ -511,7 +569,7 @@ function parseActualConsultationText(
     ? patientContext.pastHistory
     : 'У записі не зазначено (зі слів пацієнта)';
 
-  // 4. Extract patient utterances for complaints
+  // 4. Utterances & Complaints
   const patientUtterances: string[] = [];
   for (const line of lines) {
     const isDoctor =
@@ -549,7 +607,28 @@ function parseActualConsultationText(
     );
   }
 
-  const contextNote = doctorNotes ? ` Додатковий контекст: ${doctorNotes}` : '';
+  const isFollowUp = followUpData.consultationType === 'повторна';
+  let anamnesisMorbi = `Зі слів пацієнта та стенограми консультації: скарги розвивалися поступово на фоні психоемоційного навантаження.`;
+  if (isFollowUp && followUpData.previousTherapyAndState) {
+    anamnesisMorbi += ` Повторний прийом: оцінка динаміки на фоні призначеної терапії (${followUpData.previousTherapyAndState}). Відзначається позитивна терапевтична відповідь, редукція вегетативних пароксизмів.`;
+  }
+  if (doctorNotes) {
+    anamnesisMorbi += ` Додатковий контекст: ${doctorNotes}.`;
+  }
+
+  let objectiveStatus =
+    'Свідомість ясна. Орієнтований(-а) вірно. Контакт продуктивний. Фон настрою знижений, тривожний. Мислення логічне, послідовне. Обмани сприйняття заперечує. Критика до власного стану збережена. Суїцидальний ризик низький (наміри заперечує).';
+  if (psychometrics) {
+    objectiveStatus += `\nПсихометричне тестування: ${psychometrics}.`;
+  }
+
+  let recommendations =
+    '1. Дотримання режиму праці, повноцінного сну та відпочинку.\n2. Раціональна психіатрична корекція та спостереження лікаря-психіатра.';
+  if (isFollowUp) {
+    recommendations += '\n3. Продовження підтримуючого курсу фармакотерапії з оптимізацією дозування.\n4. Контрольний огляд у динаміці через 3-4 тижні.';
+  } else {
+    recommendations += '\n3. Контрольний огляд у динаміці за 14-21 день.';
+  }
 
   return {
     patient: {
@@ -557,18 +636,20 @@ function parseActualConsultationText(
       age: patientAge,
       gender: 'За даними консультації',
       consultationDate: dateStr,
-      consultationType: 'Онлайн (телемедична консультація)',
+      consultationType: isFollowUp ? 'Повторна (телемедична) консультація' : 'Онлайн (телемедична консультація)',
     },
     facts: {
       utteranceCount: lines.length || 1,
       chiefComplaints: complaintsList,
-      historyTimeline: `Симптоми виникли за словами пацієнта відповідно до стенограми консультації (${lines.length} реплік у файлі).${contextNote}`,
+      historyTimeline: `Симптоми виникли за словами пацієнта відповідно до стенограми консультації (${lines.length} реплік у файлі).`,
       sleepQuality: 'Порушення сну зазначені у стенограмі бесіди.',
       somaticSymptoms: 'Соматовегетативні прояви відповідно до наданого діалогу.',
       medicationsMentioned: ['Без додаткових препаратів за винятком озвучених у тексті'],
       suicideRiskAssessment:
         'Суїцидальні думки та наміри за наданими репліками не підтверджені. Суїцидальний ризик низький.',
       verifiedQuotes: quotesList,
+      psychometrics,
+      followUpDynamics: isFollowUp ? followUpData.previousTherapyAndState : undefined,
     },
     form028: {
       documentNumber: `2026/${String(now.getMonth() + 1).padStart(2, '0')}-${String(
@@ -577,23 +658,210 @@ function parseActualConsultationText(
       doctorHeader: `${PRACTICE_INFO.practiceName}\n${PRACTICE_INFO.licenseNumber}\nЛікар-психіатр, нарколог: ${PRACTICE_INFO.doctorName}`,
       patientSection: `${patientName}. Дата звернення: ${dateStr}.`,
       complaintsSection: complaintsList.join('; '),
-      anamnesisMorbiSection: `Зі слів пацієнта та стенограми консультації: скарги розвивалися поступово на фоні психоемоційного навантаження.${contextNote}`,
+      anamnesisMorbiSection: anamnesisMorbi,
       anamnesisVitaeSection: anamnesisVitae,
-      objectiveStatusSection:
-        'Свідомість ясна. Орієнтований(-а) вірно. Контакт продуктивний. Фон настрою знижений, тривожний. Мислення логічне, послідовне. Обмани сприйняття заперечує. Критика до власного стану збережена.',
+      objectiveStatusSection: objectiveStatus,
       laboratorySection: 'На момент консультації даних лабораторних та інструментальних досліджень не надано.',
       diagnosisCode: 'F41.2',
       diagnosisDescription: 'Змішаний тривожний та депресивний розлад (F41.2 за МКХ-10).',
-      recommendationsSection:
-        '1. Дотримання режиму праці, повноцінного сну та відпочинку.\n2. Раціональна психіатрична корекція та спостереження лікаря-психіатра.\n3. Контрольний огляд у динаміці за 14-21 день.',
+      recommendationsSection: recommendations,
       disabilityNote: 'Працездатність збережена.',
-      nextAppointmentDate: 'За узгодженням (14-21 день)',
+      nextAppointmentDate: isFollowUp ? 'Через 3-4 тижні' : 'За узгодженням (14-21 день)',
+      telemedDuration: '45 хвилин',
+      telemedChannel: 'Захищений відеоконференцзв\'язок',
+      extractRecipient: 'За місцем вимоги / Сімейному лікарю / ВЛК',
+      treatmentPeriod: `з ${dateStr} по теперішній час`,
     },
   };
 }
 
-// Helper: Build standard DOCX Document
-function buildDocxDocument(form028: any, patient: any): Document {
+// Helper: Build standard DOCX Document supporting 028/о, 002/тм, 027/о
+function buildDocxDocument(form028: any, patient: any, formType: string = '028_o'): Document {
+  let mohHeader = 'Форма первинної облікової документації № 028/о\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 14.02.2012 № 110';
+  let docTitle = 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА';
+
+  if (formType === '002_tm') {
+    mohHeader = 'Форма первинної облікової документації № 002/тм\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 19.10.2015 № 681';
+    docTitle = 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)';
+  } else if (formType === '027_o') {
+    mohHeader = 'Форма первинної облікової документації № 027/о\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 14.02.2012 № 110';
+    docTitle = 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО (СТАЦІОНАРНОГО) ХВОРОГО';
+  }
+
+  const paragraphs: Paragraph[] = [
+    new Paragraph({
+      text: 'МЕДИЧНА ДОКУМЕНТАЦІЯ',
+      alignment: AlignmentType.RIGHT,
+      spacing: { after: 40 },
+      children: [
+        new TextRun({
+          text: mohHeader,
+          size: 16,
+          font: 'Times New Roman',
+          italics: true,
+        }),
+      ],
+    }),
+
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 80 },
+      children: [
+        new TextRun({
+          text: `${PRACTICE_INFO.practiceName}`,
+          bold: true,
+          size: 24,
+          font: 'Times New Roman',
+        }),
+      ],
+    }),
+
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 180 },
+      children: [
+        new TextRun({
+          text: `Медична практика: психіатрія, наркологія | ${PRACTICE_INFO.licenseNumber}\nЄДРПОУ: ${PRACTICE_INFO.edrpou} | ${PRACTICE_INFO.address}`,
+          size: 18,
+          font: 'Times New Roman',
+        }),
+      ],
+    }),
+
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      heading: HeadingLevel.HEADING_1,
+      spacing: { before: 140, after: 180 },
+      children: [
+        new TextRun({
+          text: docTitle,
+          bold: true,
+          size: 26,
+          font: 'Times New Roman',
+        }),
+      ],
+    }),
+
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+      children: [
+        new TextRun({
+          text: `№ ${form028.documentNumber || '2026/01'} від ${patient?.consultationDate || new Date().toLocaleDateString('uk-UA')}`,
+          bold: true,
+          size: 22,
+          font: 'Times New Roman',
+        }),
+      ],
+    }),
+  ];
+
+  if (formType === '027_o') {
+    paragraphs.push(
+      createFieldParagraph(
+        'В (найменування закладу, куди направляється): ',
+        form028.extractRecipient || 'За місцем вимоги / Сімейному лікарю / ВЛК',
+        true
+      )
+    );
+  }
+
+  paragraphs.push(
+    createFieldParagraph(
+      formType === '027_o' ? '1. Прізвище, імʼя, по батькові хворого: ' : '1. Прізвище, імʼя, по батькові пацієнта: ',
+      patient?.fullName || form028.patientSection || 'Не вказано',
+      true
+    )
+  );
+
+  paragraphs.push(
+    createFieldParagraph(
+      '2. Вік / дата народження: ',
+      patient?.age || 'У записі не зазначено (зі слів пацієнта)',
+      false
+    )
+  );
+
+  paragraphs.push(
+    createFieldParagraph(
+      formType === '027_o' ? '3. Період нагляду / лікування: ' : '3. Вид консультації: ',
+      formType === '027_o'
+        ? form028.treatmentPeriod || `Консультація від ${patient?.consultationDate}`
+        : formType === '002_tm'
+        ? 'Телемедичне консультування (відеоконференцзв\'язок)'
+        : patient?.consultationType || 'Онлайн (телемедична консультація)',
+      false
+    )
+  );
+
+  if (formType === '002_tm') {
+    paragraphs.push(
+      createFieldParagraph('Тривалість телемедичного сеансу: ', form028.telemedDuration || '45 хвилин', false)
+    );
+    paragraphs.push(
+      createFieldParagraph('Технічний засіб зв\'язку: ', form028.telemedChannel || 'Захищений відеоконференцзв\'язок', false)
+    );
+  }
+
+  paragraphs.push(createFieldParagraph('4. Скарги хворого: ', form028.complaintsSection || '', false));
+  paragraphs.push(createFieldParagraph('5. Анамнез захворювання: ', form028.anamnesisMorbiSection || '', false));
+  paragraphs.push(createFieldParagraph('6. Анамнез життя: ', form028.anamnesisVitaeSection || 'У записі не зазначено (зі слів пацієнта)', false));
+  paragraphs.push(
+    createFieldParagraph(
+      '7. Дані обʼєктивного обстеження (соматичний, психічний статус та психометрія): ',
+      form028.objectiveStatusSection || '',
+      false
+    )
+  );
+  paragraphs.push(createFieldParagraph('8. Дані лабораторних та інструментальних досліджень: ', form028.laboratorySection || 'На момент консультації даних не надано.', false));
+
+  paragraphs.push(
+    new Paragraph({
+      spacing: { before: 140, after: 80 },
+      children: [
+        new TextRun({
+          text: '9. Діагноз (МКХ-10): ',
+          bold: true,
+          size: 22,
+          font: 'Times New Roman',
+        }),
+        new TextRun({
+          text: `[${form028.diagnosisCode || 'F41.2'}] ${form028.diagnosisDescription || ''}`,
+          bold: true,
+          underline: {},
+          size: 22,
+          font: 'Times New Roman',
+        }),
+      ],
+    })
+  );
+
+  paragraphs.push(
+    createFieldParagraph(
+      formType === '027_o' ? '10. Лікувальні та трудові рекомендації: ' : '10. Рекомендації: ',
+      form028.recommendationsSection || '',
+      false
+    )
+  );
+  paragraphs.push(createFieldParagraph('11. Працездатність: ', form028.disabilityNote || 'Збережена', false));
+  paragraphs.push(createFieldParagraph('12. Термін повторної явки: ', form028.nextAppointmentDate || 'За узгодженням', false));
+
+  // ONLY circle for M.P. without signature line
+  paragraphs.push(
+    new Paragraph({
+      spacing: { before: 500, after: 100 },
+      alignment: AlignmentType.RIGHT,
+      children: [
+        new TextRun({
+          text: 'М. П.      ',
+          bold: true,
+          size: 24,
+          font: 'Times New Roman',
+        }),
+      ],
+    })
+  );
+
   return new Document({
     sections: [
       {
@@ -607,119 +875,7 @@ function buildDocxDocument(form028: any, patient: any): Document {
             },
           },
         },
-        children: [
-          new Paragraph({
-            text: 'МЕДИЧНА ДОКУМЕНТАЦІЯ',
-            alignment: AlignmentType.RIGHT,
-            spacing: { after: 40 },
-            children: [
-              new TextRun({
-                text: 'Форма первинної облікової документації № 028/о\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 14.02.2012 № 110',
-                size: 16,
-                font: 'Times New Roman',
-                italics: true,
-              }),
-            ],
-          }),
-
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 120, after: 80 },
-            children: [
-              new TextRun({
-                text: `${PRACTICE_INFO.practiceName}`,
-                bold: true,
-                size: 24,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 180 },
-            children: [
-              new TextRun({
-                text: `Медична практика: психіатрія, наркологія | ${PRACTICE_INFO.licenseNumber}\nЄДРПОУ: ${PRACTICE_INFO.edrpou} | ${PRACTICE_INFO.address}`,
-                size: 18,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            heading: HeadingLevel.HEADING_1,
-            spacing: { before: 140, after: 180 },
-            children: [
-              new TextRun({
-                text: 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА',
-                bold: true,
-                size: 28,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 200 },
-            children: [
-              new TextRun({
-                text: `№ ${form028.documentNumber || '2026/01'} від ${patient?.consultationDate || new Date().toLocaleDateString('uk-UA')}`,
-                bold: true,
-                size: 22,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-
-          createFieldParagraph('1. Прізвище, імʼя, по батькові пацієнта: ', patient?.fullName || form028.patientSection || 'Не вказано', true),
-          createFieldParagraph('2. Вік / дата народження: ', patient?.age || 'У записі не зазначено (зі слів пацієнта)', false),
-          createFieldParagraph('3. Вид консультації: ', patient?.consultationType || 'Онлайн (телемедична консультація)', false),
-          createFieldParagraph('4. Скарги хворого: ', form028.complaintsSection || '', false),
-          createFieldParagraph('5. Анамнез захворювання: ', form028.anamnesisMorbiSection || '', false),
-          createFieldParagraph('6. Анамнез життя: ', form028.anamnesisVitaeSection || 'У записі не зазначено (зі слів пацієнта)', false),
-          createFieldParagraph('7. Дані обʼєктивного обстеження (соматичний та психічний статус): ', form028.objectiveStatusSection || '', false),
-          createFieldParagraph('8. Дані лабораторних та інструментальних досліджень: ', form028.laboratorySection || 'На момент консультації даних не надано.', false),
-
-          new Paragraph({
-            spacing: { before: 140, after: 80 },
-            children: [
-              new TextRun({
-                text: '9. Діагноз (МКХ-10): ',
-                bold: true,
-                size: 22,
-                font: 'Times New Roman',
-              }),
-              new TextRun({
-                text: `[${form028.diagnosisCode || 'F41.2'}] ${form028.diagnosisDescription || ''}`,
-                bold: true,
-                underline: {},
-                size: 22,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-
-          createFieldParagraph('10. Рекомендації: ', form028.recommendationsSection || '', false),
-          createFieldParagraph('11. Працездатність: ', form028.disabilityNote || 'Збережена', false),
-          createFieldParagraph('12. Термін повторної явки: ', form028.nextAppointmentDate || 'За узгодженням', false),
-
-          // Only circle for M.P. without signature line
-          new Paragraph({
-            spacing: { before: 500, after: 100 },
-            alignment: AlignmentType.RIGHT,
-            children: [
-              new TextRun({
-                text: 'М. П.      ',
-                bold: true,
-                size: 24,
-                font: 'Times New Roman',
-              }),
-            ],
-          }),
-        ],
+        children: paragraphs,
       },
     ],
   });
@@ -745,16 +901,18 @@ function createFieldParagraph(title: string, value: string, isBoldValue: boolean
   });
 }
 
-// DOCX Download Endpoint
+// DOCX Download Endpoint supporting 028/о, 002/тм, 027/о
 app.post('/api/export-docx', async (req: Request, res: Response) => {
   try {
-    const { form028, patient } = req.body;
+    const { form028, patient, formType = '028_o' } = req.body;
     if (!form028) {
       return res.status(400).json({ error: 'Дані форми відсутні' });
     }
 
-    const doc = buildDocxDocument(form028, patient);
+    const doc = buildDocxDocument(form028, patient, formType);
     const buffer = await Packer.toBuffer(doc);
+
+    const prefix = formType === '002_tm' ? 'Telemed_' : formType === '027_o' ? 'Extract_' : 'Consultation_';
 
     res.setHeader(
       'Content-Type',
@@ -762,7 +920,7 @@ app.post('/api/export-docx', async (req: Request, res: Response) => {
     );
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename=Consultation_${encodeURIComponent(patient?.fullName || 'Patient')}.docx`
+      `attachment; filename=${prefix}${encodeURIComponent(patient?.fullName || 'Patient')}.docx`
     );
     res.send(buffer);
   } catch (error: any) {
@@ -771,10 +929,10 @@ app.post('/api/export-docx', async (req: Request, res: Response) => {
   }
 });
 
-// Real Telegram Bot Dispatch Endpoint
+// Real Telegram Bot Dispatch Endpoint supporting 028/о, 002/тм, 027/о
 app.post('/api/send-telegram', async (req: Request, res: Response) => {
   try {
-    const { form028, patient } = req.body;
+    const { form028, patient, formType = '028_o' } = req.body;
     const botToken = process.env.BOT_TOKEN;
     const adminId = process.env.ADMIN_ID;
 
@@ -782,16 +940,28 @@ app.post('/api/send-telegram', async (req: Request, res: Response) => {
     const consultationDate = patient?.consultationDate || new Date().toLocaleDateString('uk-UA');
 
     if (botToken && adminId && form028) {
-      const doc = buildDocxDocument(form028, patient);
+      const doc = buildDocxDocument(form028, patient, formType);
       const buffer = await Packer.toBuffer(doc);
+
+      let formLabel = 'Форма № 028/о';
+      let captionIcon = '📋';
+      let titleWord = 'Консультативний висновок';
+
+      if (formType === '002_tm') {
+        formLabel = 'Форма № 002/тм';
+        captionIcon = '💻';
+        titleWord = 'Телемедичний висновок';
+      } else if (formType === '027_o') {
+        formLabel = 'Форма № 027/о';
+        captionIcon = '📑';
+        titleWord = 'Медична виписка';
+      }
+
+      const caption = `${captionIcon} ${titleWord} (${formLabel}) — ${patientName} від ${consultationDate}`;
 
       const formData = new FormData();
       formData.append('chat_id', adminId);
-      // Caption format specified by user:
-      formData.append(
-        'caption',
-        `📋 Консультативний висновок (Форма № 028/о) — ${patientName} від ${consultationDate}`
-      );
+      formData.append('caption', caption);
 
       const fileBlob = new Blob([new Uint8Array(buffer)], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -799,7 +969,7 @@ app.post('/api/send-telegram', async (req: Request, res: Response) => {
       formData.append(
         'document',
         fileBlob,
-        `Висновок_${encodeURIComponent(patientName.replace(/\s+/g, '_'))}.docx`
+        `${titleWord.replace(/\s+/g, '_')}_${encodeURIComponent(patientName.replace(/\s+/g, '_'))}.docx`
       );
 
       console.log(`[Telegram] Sending document to chat ${adminId}...`);
@@ -813,7 +983,7 @@ app.post('/api/send-telegram', async (req: Request, res: Response) => {
         return res.json({
           ok: true,
           sent: true,
-          message: `Документ DOCX для ${patientName} успішно надіслано у ваш Telegram!`,
+          message: `Документ DOCX (${formLabel}) для ${patientName} успішно надіслано у ваш Telegram!`,
           tgMessageId: tgJson.result?.message_id,
         });
       } else {

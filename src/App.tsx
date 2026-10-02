@@ -1,10 +1,19 @@
 import React, { useState } from 'react';
 import { Header } from './components/Header';
-import { UploadCard, PatientContextData } from './components/UploadModalOrCard';
+import {
+  UploadCard,
+  PatientContextData,
+  ConsultationModeData,
+} from './components/UploadModalOrCard';
 import { FactsColumn } from './components/FactsColumn';
 import { MedicalDocumentA4 } from './components/MedicalDocumentA4';
 import { TelegramModal } from './components/TelegramModal';
-import { ConsultationResult, Form028Data, PatientInfo } from './types/clinical';
+import {
+  ConsultationResult,
+  Form028Data,
+  PatientInfo,
+  FormType,
+} from './types/clinical';
 import { DEMO_CONSULTATION_RESULT, DEMO_RAW_TRANSCRIPT } from './data/demoData';
 import {
   Printer,
@@ -12,10 +21,14 @@ import {
   Copy,
   Check,
   Sparkles,
+  FileText,
+  Video,
+  FileCheck2,
 } from 'lucide-react';
 
 export default function App() {
   const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [currentFormType, setCurrentFormType] = useState<FormType>('028_o');
   const [isProcessing, setIsProcessing] = useState(false);
   const [consultationData, setConsultationData] = useState<ConsultationResult | null>(null);
   const [rawTranscript, setRawTranscript] = useState<string>('');
@@ -37,13 +50,17 @@ export default function App() {
   const handleProcessTranscript = async (
     transcript: string,
     metadata?: any,
-    formType: string = '028_o',
+    formType: FormType = currentFormType,
     rawJson?: any,
     doctorNotes?: string,
-    patientContext?: PatientContextData
+    patientContext?: PatientContextData,
+    psychometrics?: string,
+    followUpData?: ConsultationModeData
   ) => {
     setIsProcessing(true);
     setRawTranscript(transcript);
+    setCurrentFormType(formType);
+
     if (metadata?.fileName) {
       setCurrentFileName(metadata.fileName);
     }
@@ -57,6 +74,8 @@ export default function App() {
         formType,
         doctorNotes: doctorNotes || '',
         patientContext: patientContext || {},
+        psychometrics: psychometrics || '',
+        followUpData: followUpData || {},
       };
 
       if (rawJson && typeof rawJson === 'object') {
@@ -73,7 +92,7 @@ export default function App() {
 
       const result = await response.json();
       if (result.ok && result.data) {
-        setConsultationData(result.data);
+        setConsultationData({ ...result.data, formType });
         const patientName = result.data.patient?.fullName || 'Пацієнт';
         const sourceName =
           result.source === 'gemini'
@@ -95,7 +114,10 @@ export default function App() {
   const handleLoadDemo = () => {
     setRawTranscript(DEMO_RAW_TRANSCRIPT);
     setCurrentFileName('demo_consultation_f41.json');
-    setConsultationData(DEMO_CONSULTATION_RESULT);
+    setConsultationData({
+      ...DEMO_CONSULTATION_RESULT,
+      formType: currentFormType,
+    });
     showToast('Зразок прийому завантажено: Мельник І.О.');
   };
 
@@ -105,7 +127,7 @@ export default function App() {
     window.print();
   };
 
-  // Export DOCX (Strictly no "психотерапевт", only M.P. seal circle)
+  // Export DOCX matching active form standard (Strictly no "психотерапевт", only M.P.)
   const handleExportDocx = async () => {
     if (!consultationData) return;
 
@@ -116,6 +138,7 @@ export default function App() {
         body: JSON.stringify({
           form028: consultationData.form028,
           patient: consultationData.patient,
+          formType: currentFormType,
         }),
       });
 
@@ -125,20 +148,21 @@ export default function App() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Висновок_${consultationData.patient.fullName.replace(/\s+/g, '_')}.docx`;
+      const formCode = currentFormType.replace('_', '/');
+      a.download = `Документ_${formCode}_${consultationData.patient.fullName.replace(/\s+/g, '_')}.docx`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      showToast('Файл .docx сформовано та завантажено!');
+      showToast(`Файл .docx (${formCode}) сформовано та завантажено!`);
     } catch (err: any) {
       console.error(err);
       showToast('Не вдалося експортувати DOCX');
     }
   };
 
-  // Real Telegram dispatch
+  // Real Telegram dispatch matching active form standard
   const handleSendTelegram = async () => {
     if (!consultationData) return;
 
@@ -150,6 +174,7 @@ export default function App() {
         body: JSON.stringify({
           form028: consultationData.form028,
           patient: consultationData.patient,
+          formType: currentFormType,
         }),
       });
 
@@ -173,21 +198,28 @@ export default function App() {
     const doc = consultationData.form028;
     const p = consultationData.patient;
 
+    const formTitle =
+      currentFormType === '002_tm'
+        ? 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)'
+        : currentFormType === '027_o'
+        ? 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО ХВОРОГО'
+        : 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА';
+
     const fullText = `ФОП ВІЛЕНЧИК АНТОН ПАВЛОВИЧ
 Лікар-психіатр, нарколог
 Ліцензія МОЗ України № 854 від 17.05.2024 р.
-КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА № ${doc.documentNumber} від ${p.consultationDate}
+${formTitle} № ${doc.documentNumber} від ${p.consultationDate}
 1. Пацієнт: ${p.fullName}, ${p.age} (${p.consultationType})
 2. Скарги: ${doc.complaintsSection}
 3. Анамнез захворювання: ${doc.anamnesisMorbiSection}
 4. Анамнез життя: ${doc.anamnesisVitaeSection}
-5. Об'єктивний статус: ${doc.objectiveStatusSection}
+5. Об'єктивний статус та психометрія: ${doc.objectiveStatusSection}
 6. Дослідження: ${doc.laboratorySection}
 7. Діагноз: [${doc.diagnosisCode}] ${doc.diagnosisDescription}
 8. Рекомендації:
 ${doc.recommendationsSection}
 9. Працездатність: ${doc.disabilityNote}
-10. Термін повторної явки: ${doc.nextAppointmentDate}
+10. Повторна явка: ${doc.nextAppointmentDate}
 М. П.`;
 
     navigator.clipboard.writeText(fullText);
@@ -244,7 +276,7 @@ ${doc.recommendationsSection}
               Аналіз консультації через {selectedModel}...
             </h3>
             <p className="mt-1 text-xs text-gray-500 max-w-md">
-              Структуруємо дані пацієнта, анамнез життя, психопатологічний статус та рекомендації за Формою № 028/о
+              Аналізуємо діалог, психометричні шкали та динаміку лікування за стандартами МОЗ
             </p>
           </div>
         )}
@@ -255,15 +287,16 @@ ${doc.recommendationsSection}
             onProcessTranscript={handleProcessTranscript}
             onLoadDemo={handleLoadDemo}
             isProcessing={isProcessing}
+            initialFormType={currentFormType}
           />
         )}
 
         {/* Two-Column Clinical Workspace */}
         {consultationData && !isProcessing && (
           <div>
-            {/* Secondary Action Toolbar */}
+            {/* Secondary Action Toolbar with Form Selector */}
             <div className="no-print mb-4 flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-xl border border-gray-200 shadow-2xs">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-semibold text-gray-900">
                   {consultationData.patient.fullName}
                 </span>
@@ -271,6 +304,14 @@ ${doc.recommendationsSection}
                 <span className="text-xs text-gray-600">
                   МКХ-10: <strong>{consultationData.form028.diagnosisCode}</strong> ({consultationData.form028.diagnosisDescription})
                 </span>
+
+                {/* Form Badge */}
+                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-semibold">
+                  {currentFormType === '028_o' && 'Форма № 028/о'}
+                  {currentFormType === '002_tm' && 'Форма № 002/тм'}
+                  {currentFormType === '027_o' && 'Форма № 027/о'}
+                </div>
+
                 {currentFileName && (
                   <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500 font-mono">
                     {currentFileName}
@@ -305,14 +346,14 @@ ${doc.recommendationsSection}
               </div>
             </div>
 
-            {/* Split Grid: Left = Verified Facts, Right = A4 Form 028/о */}
+            {/* Split Grid: Left = Verified Facts & Scales, Right = A4 Document Sheet */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left Column: Facts */}
               <div className="lg:col-span-5 xl:col-span-4 no-print">
                 <div className="sticky top-20">
                   <div className="flex items-center justify-between mb-3 px-1">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                      Факти з розмови (Clinical Grounding)
+                      Факти, психометрія та динаміка
                     </h3>
                     <span className="text-[11px] text-gray-500">
                       {consultationData.facts.utteranceCount} реплік
@@ -331,8 +372,10 @@ ${doc.recommendationsSection}
                 <MedicalDocumentA4
                   form028={consultationData.form028}
                   patient={consultationData.patient}
+                  formType={currentFormType}
                   onUpdateForm={handleUpdateForm}
                   onUpdatePatient={handleUpdatePatient}
+                  onSelectFormType={setCurrentFormType}
                 />
               </div>
             </div>

@@ -1,3 +1,5 @@
+export type FormType = '028_o' | '002_tm' | '027_o';
+
 export interface PatientInfo {
   fullName: string;
   age: string;
@@ -21,6 +23,8 @@ export interface ClinicalFacts {
   medicationsMentioned: string[];
   suicideRiskAssessment: string;
   verifiedQuotes: FactQuote[];
+  psychometrics?: string;
+  followUpDynamics?: string;
 }
 
 export interface Form028Data {
@@ -37,10 +41,19 @@ export interface Form028Data {
   recommendationsSection: string;
   disabilityNote: string;
   nextAppointmentDate: string;
+  
+  // Specific fields for Form 002/тм (Telemedicine)
+  telemedDuration?: string;
+  telemedChannel?: string;
+
+  // Specific fields for Form 027/о (Medical Card Extract)
+  extractRecipient?: string;
+  treatmentPeriod?: string;
 }
 
 export interface ConsultationResult {
   patient: PatientInfo;
   facts: ClinicalFacts;
   form028: Form028Data;
+  formType?: FormType;
 }
