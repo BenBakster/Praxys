@@ -1,6 +1,1 @@
-{
-  "name": "Praxis Студія — Медичні висновки та аналітика",
-  "description": "Клінічна система для автоматичного структурування консультацій лікаря, виділення фактів та формування офіційних бланків (Форма № 028/о МОЗ України) у векторному друку та CamScanner.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
+{"name":"Praxis Студія — Медичні висновки та аналітика","description":"Клінічна система для автоматичного структурування консультацій лікаря, виділення фактів та формування офіційних бланків (Форма № 028/о МОЗ України) у векторному друку та CamScanner.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}

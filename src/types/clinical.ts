@@ -57,3 +57,13 @@ export interface ConsultationResult {
   form028: Form028Data;
   formType?: FormType;
 }
+
+export type AiProviderType = 'gemini' | 'openai' | 'groq' | 'deepseek' | 'offline';
+
+export interface AiConfig {
+  provider: AiProviderType;
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+

@@ -16,6 +16,8 @@ import {
   Activity,
   Repeat,
   FileCheck2,
+  X,
+  Loader2,
 } from 'lucide-react';
 import { FormType } from '../types/clinical';
 
@@ -39,7 +41,8 @@ interface UploadProps {
     doctorNotes?: string,
     patientContext?: PatientContextData,
     psychometrics?: string,
-    followUpData?: ConsultationModeData
+    followUpData?: ConsultationModeData,
+    priorConsultationHistory?: any
   ) => void;
   onLoadDemo: () => void;
   isProcessing: boolean;
@@ -84,6 +87,27 @@ export const UploadCard: React.FC<UploadProps> = ({
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 4. Prior Consultation Document (PDF, DOCX, MD, TXT, JSON)
+  const [priorDocInfo, setPriorDocInfo] = useState<{
+    fileName: string;
+    fileSize: number;
+    rawText: string;
+    extracted?: {
+      patientName?: string;
+      dob?: string;
+      pastDiagnosisCode?: string;
+      pastDiagnosisDescription?: string;
+      pastTherapy?: string;
+      anamnesisVitae?: string;
+      consultationDate?: string;
+      summary?: string;
+    };
+  } | null>(null);
+  const [isParsingPriorDoc, setIsParsingPriorDoc] = useState(false);
+  const [priorDocError, setPriorDocError] = useState<string | null>(null);
+  const [priorDragActive, setPriorDragActive] = useState(false);
+  const priorFileInputRef = useRef<HTMLInputElement>(null);
 
   const historyPresets = [
     'Хронічні соматичні патології заперечує',
@@ -133,6 +157,110 @@ export const UploadCard: React.FC<UploadProps> = ({
     consultationType: consultationNature,
     previousTherapyAndState: consultationNature === 'повторна' ? previousTherapy.trim() || undefined : undefined,
   });
+
+  const getPriorConsultationHistory = () => {
+    if (!priorDocInfo) return undefined;
+    return {
+      fileName: priorDocInfo.fileName,
+      rawText: priorDocInfo.rawText,
+      summary: priorDocInfo.extracted?.summary,
+      pastDiagnosisCode: priorDocInfo.extracted?.pastDiagnosisCode,
+      pastDiagnosisDescription: priorDocInfo.extracted?.pastDiagnosisDescription,
+      pastTherapy: priorDocInfo.extracted?.pastTherapy,
+      anamnesisVitae: priorDocInfo.extracted?.anamnesisVitae,
+      consultationDate: priorDocInfo.extracted?.consultationDate,
+      dob: priorDocInfo.extracted?.dob,
+      patientName: priorDocInfo.extracted?.patientName,
+    };
+  };
+
+  const handlePriorFile = async (file: File) => {
+    setIsParsingPriorDoc(true);
+    setPriorDocError(null);
+    try {
+      const lowerName = file.name.toLowerCase();
+      let fileBase64 = '';
+      let textContent = '';
+
+      if (lowerName.endsWith('.txt') || lowerName.endsWith('.md')) {
+        textContent = await file.text();
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(arrayBuffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        fileBase64 = btoa(binary);
+      }
+
+      const resp = await fetch('/api/parse-history-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileBase64: fileBase64 || undefined,
+          textContent: textContent || undefined,
+        }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        throw new Error(data.error || 'Не вдалося розпізнати файл попереднього огляду');
+      }
+
+      const extracted = data.extracted || {};
+      setPriorDocInfo({
+        fileName: file.name,
+        fileSize: file.size,
+        rawText: data.rawText || '',
+        extracted,
+      });
+
+      if (extracted.patientName && !patientFullName) {
+        setPatientFullName(extracted.patientName);
+      }
+      if (extracted.dob && !patientDob) {
+        setPatientDob(extracted.dob);
+      }
+      if (extracted.anamnesisVitae) {
+        setPatientPastHistory((prev) => (prev ? `${prev}; ${extracted.anamnesisVitae}` : extracted.anamnesisVitae));
+      }
+
+      setConsultationNature('повторна');
+
+      let therapyStr = '';
+      if (extracted.pastTherapy) {
+        therapyStr = extracted.pastTherapy;
+      }
+      if (extracted.pastDiagnosisCode) {
+        const diagStr = `Діагноз: ${extracted.pastDiagnosisCode}${extracted.pastDiagnosisDescription ? ` (${extracted.pastDiagnosisDescription})` : ''}`;
+        therapyStr = therapyStr ? `${diagStr}. Терапія: ${therapyStr}` : diagStr;
+      }
+      if (extracted.consultationDate) {
+        therapyStr = `Попередній огляд від ${extracted.consultationDate}. ${therapyStr}`;
+      }
+      if (therapyStr) {
+        setPreviousTherapy(therapyStr);
+      }
+
+      setShowPatientCard(true);
+    } catch (err: any) {
+      console.error('Prior document parsing error:', err);
+      setPriorDocError(err.message || 'Помилка завантаження попереднього огляду');
+    } finally {
+      setIsParsingPriorDoc(false);
+    }
+  };
+
+  const clearPriorDoc = () => {
+    setPriorDocInfo(null);
+    setPriorDocError(null);
+    if (priorFileInputRef.current) {
+      priorFileInputRef.current.value = '';
+    }
+  };
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -201,7 +329,8 @@ export const UploadCard: React.FC<UploadProps> = ({
           doctorNotes,
           pContext,
           psychometrics,
-          followUp
+          followUp,
+          getPriorConsultationHistory()
         );
       } catch {
         const lines = rawContent.split('\n').filter(Boolean);
@@ -222,7 +351,8 @@ export const UploadCard: React.FC<UploadProps> = ({
           doctorNotes,
           pContext,
           psychometrics,
-          followUp
+          followUp,
+          getPriorConsultationHistory()
         );
       }
     };
@@ -300,7 +430,8 @@ export const UploadCard: React.FC<UploadProps> = ({
       doctorNotes,
       getPatientContext(),
       getCombinedPsychometrics(),
-      getFollowUpData()
+      getFollowUpData(),
+      getPriorConsultationHistory()
     );
   };
 
@@ -465,6 +596,130 @@ export const UploadCard: React.FC<UploadProps> = ({
                   ))}
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* SECTION: Prior Consultation Document (PDF, DOCX, MD, TXT, JSON) */}
+          <div className="border border-indigo-100 rounded-xl bg-indigo-50/25 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-semibold text-gray-900">
+                  Попередній огляд / Анамнез пацієнта (PDF, DOCX, MD, TXT, JSON):
+                </span>
+                <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium hidden sm:inline-block">
+                  Автоматичне підтягування даних
+                </span>
+              </div>
+              {priorDocInfo && (
+                <button
+                  type="button"
+                  onClick={clearPriorDoc}
+                  className="text-[11px] text-red-500 hover:text-red-700 flex items-center gap-1 font-medium transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" /> Видалити
+                </button>
+              )}
+            </div>
+
+            {!priorDocInfo ? (
+              <div
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  setPriorDragActive(true);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setPriorDragActive(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setPriorDragActive(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setPriorDragActive(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    handlePriorFile(e.dataTransfer.files[0]);
+                  }
+                }}
+                onClick={() => priorFileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-3.5 text-center cursor-pointer transition-all ${
+                  priorDragActive
+                    ? 'border-indigo-500 bg-indigo-50/80 scale-[1.005]'
+                    : 'border-indigo-200/90 hover:border-indigo-400 bg-white hover:bg-indigo-50/30'
+                }`}
+              >
+                <input
+                  ref={priorFileInputRef}
+                  type="file"
+                  accept=".pdf,.docx,.doc,.md,.txt,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handlePriorFile(e.target.files[0]);
+                    }
+                  }}
+                />
+                {isParsingPriorDoc ? (
+                  <div className="flex items-center justify-center gap-2 py-1 text-xs text-indigo-700 font-medium">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                    <span>Скан та розпізнавання попереднього висновку...</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2 py-0.5 text-xs text-gray-600">
+                    <UploadCloud className="w-4 h-4 text-indigo-500" />
+                    <span>
+                      <strong className="text-indigo-600 font-semibold">Перетягніть минулий огляд</strong> (Форма 028/о, DOCX, PDF, виписка, TXT) або оберіть файл
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white border border-indigo-200 rounded-xl p-3 shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="text-xs font-semibold text-gray-800 truncate max-w-xs sm:max-w-md">
+                      {priorDocInfo.fileName}
+                    </span>
+                    <span className="text-[10px] text-gray-400">
+                      ({(priorDocInfo.fileSize / 1024).toFixed(1)} КБ)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200/60">
+                    Дані підтягнуто в картку та динаміку
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px] bg-indigo-50/30 p-2.5 rounded-lg border border-indigo-100/60">
+                  <div>
+                    <span className="text-gray-400 block text-[10px]">Пацієнт / ДН:</span>
+                    <strong className="text-gray-800">
+                      {priorDocInfo.extracted?.patientName || 'З тексту'} {priorDocInfo.extracted?.dob ? `(${priorDocInfo.extracted.dob})` : ''}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block text-[10px]">Минулий діагноз:</span>
+                    <strong className="text-indigo-700">
+                      {priorDocInfo.extracted?.pastDiagnosisCode || 'Визначено'}{' '}
+                      {priorDocInfo.extracted?.pastDiagnosisDescription ? `— ${priorDocInfo.extracted.pastDiagnosisDescription.slice(0, 30)}...` : ''}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block text-[10px]">Минула терапія:</span>
+                    <span className="text-gray-700 font-medium truncate block" title={priorDocInfo.extracted?.pastTherapy || ''}>
+                      {priorDocInfo.extracted?.pastTherapy || 'Зазначено в документі'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {priorDocError && (
+              <p className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded-lg border border-red-200">
+                {priorDocError}
+              </p>
             )}
           </div>
 

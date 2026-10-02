@@ -12,6 +12,8 @@ import {
   HeadingLevel,
   AlignmentType,
 } from 'docx';
+import mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
 
 dotenv.config();
 
@@ -152,18 +154,6 @@ function extractAllPossibleDialogue(body: any): { text: string; count: number; m
     lines.push(target.text.trim());
   } else if (typeof body.transcript === 'string' && body.transcript.trim()) {
     lines.push(body.transcript.trim());
-  } else {
-    const recurse = (o: any) => {
-      if (!o) return;
-      if (typeof o === 'string' && o.trim().length > 5) {
-        lines.push(o.trim());
-      } else if (Array.isArray(o)) {
-        o.forEach(recurse);
-      } else if (typeof o === 'object') {
-        Object.values(o).forEach(recurse);
-      }
-    };
-    recurse(target);
   }
 
   return {
@@ -178,22 +168,409 @@ app.get('/api/status', (req: Request, res: Response) => {
   res.json({
     ok: true,
     hasApiKey: Boolean(geminiApiKey),
-    activeModel: 'gemini-2.5-flash',
+    activeModel: 'gemini-3.8-flash',
+    supportedProviders: [
+      { id: 'gemini', name: 'Google Gemini', defaultModel: 'gemini-3.8-flash' },
+      { id: 'openai', name: 'OpenAI (ChatGPT)', defaultModel: 'gpt-4o' },
+      { id: 'groq', name: 'Groq (Llama 3.3)', defaultModel: 'llama-3.3-70b-versatile' },
+      { id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' },
+      { id: 'offline', name: 'Без моделі', defaultModel: 'text-only' },
+    ],
     supportedModels: [
-      { id: 'gemini-2.5-flash', name: 'Google Gemini 2.5 Flash', tag: 'Основна модель' },
-      { id: 'gemini-2.0-flash', name: 'Google Gemini 2.0 Flash', tag: 'Швидка / резервна' },
+      { id: 'gemini-3.8-flash', name: 'Google Gemini 3.8 Flash', tag: 'Основна модель' },
+      { id: 'gemini-3.5-flash', name: 'Google Gemini 3.5 Flash', tag: 'Швидка / резервна' },
+      { id: 'gemini-flash-latest', name: 'Google Gemini Flash Latest', tag: 'Автоматична' },
     ],
     supportedForms: [
       { id: '028_o', name: 'Форма № 028/о (Консультативний висновок спеціаліста)' },
       { id: '002_tm', name: 'Форма № 002/тм (Висновок консультанта телемедицини)' },
       { id: '027_o', name: 'Форма № 027/о (Виписка із медичної карти амбулаторного хворого)' },
     ],
-    doctor: PRACTICE_INFO,
-    telegramConfigured: Boolean(process.env.BOT_TOKEN && process.env.ADMIN_ID),
   });
 });
 
+// Helper for OpenAI-compatible APIs (OpenAI, Groq, DeepSeek, Local Ollama, etc.)
+async function callOpenAiCompatibleApi({
+  apiKey,
+  baseUrl,
+  model,
+  systemPrompt,
+  userPrompt,
+}: {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<any> {
+  let url = (baseUrl || 'https://api.openai.com/v1').trim();
+  if (!url.endsWith('/chat/completions')) {
+    url = `${url.replace(/\/+$/, '')}/chat/completions`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: model || 'gpt-4o',
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: `${systemPrompt}\n\nВАЖЛИВО: Обов'язково поверни виключно валідний JSON-об'єкт із трьома кореневими ключами: "patient", "facts", "form028". Жодного тексту за межами JSON!`,
+        },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Помилка API (${response.status}): ${errorBody.slice(0, 300)}`);
+  }
+
+  const result = await response.json();
+  const rawContent = result?.choices?.[0]?.message?.content;
+  if (!rawContent) {
+    throw new Error('Отримано порожню відповідь від ШІ');
+  }
+
+  const cleaned = rawContent.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// Test AI Connection Endpoint
+app.post('/api/test-ai', async (req: Request, res: Response) => {
+  try {
+    const { provider, model, apiKey, baseUrl } = req.body;
+
+    if (provider === 'offline') {
+      return res.json({
+        ok: true,
+        message: 'Режим без моделі. Текст нікуди не відправляється, діагноз не пишеться.',
+      });
+    }
+
+    if (provider === 'gemini') {
+      const keyToUse = (apiKey || geminiApiKey || '').trim();
+      if (!keyToUse) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Ключ Google Gemini не знайдено на сервері та не передано у запиті.',
+        });
+      }
+      const testClient = new GoogleGenAI({ apiKey: keyToUse });
+      const testModel = model || 'gemini-3.8-flash';
+      const testResp = await testClient.models.generateContent({
+        model: testModel,
+        contents: 'Дай відповідь одним коротким словом: Працює',
+      });
+      if (testResp.text) {
+        return res.json({
+          ok: true,
+          message: `Google Gemini (${testModel}) успішно перевірено!`,
+        });
+      }
+    } else {
+      let endpointUrl = (baseUrl || '').trim();
+      if (!endpointUrl) {
+        if (provider === 'openai') endpointUrl = 'https://api.openai.com/v1';
+        else if (provider === 'groq') endpointUrl = 'https://api.groq.com/openai/v1';
+        else if (provider === 'deepseek') endpointUrl = 'https://api.deepseek.com';
+        else endpointUrl = 'https://api.openai.com/v1';
+      }
+
+      const keyToUse = (apiKey || '').trim();
+      if (!keyToUse) {
+        return res.status(400).json({
+          ok: false,
+          error: `Введіть API-ключ для ${String(provider).toUpperCase()}`,
+        });
+      }
+
+      const url = endpointUrl.endsWith('/chat/completions')
+        ? endpointUrl
+        : `${endpointUrl.replace(/\/+$/, '')}/chat/completions`;
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${keyToUse}`,
+        },
+        body: JSON.stringify({
+          model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini'),
+          messages: [{ role: 'user', content: 'Say OK' }],
+          max_tokens: 10,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text();
+        return res.status(resp.status).json({
+          ok: false,
+          error: `Помилка ${resp.status}: ${errText.slice(0, 200)}`,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        message: `${(provider || 'ШІ').toUpperCase()} (${model}) підключено успішно!`,
+      });
+    }
+
+    return res.json({ ok: true, message: 'Зв\'язок встановлено успішно!' });
+  } catch (err: any) {
+    console.error('Test AI error:', err);
+    return res.status(500).json({
+      ok: false,
+      error: err.message || 'Не вдалося встановити зв’язок із ШІ',
+    });
+  }
+});
+
+// Helper: Extract raw text from various history file formats (PDF, DOCX, MD, TXT, JSON)
+async function extractTextFromHistoryFile(
+  fileName: string,
+  fileBase64?: string,
+  textContent?: string
+): Promise<string> {
+  if (textContent && textContent.trim()) {
+    return textContent.trim();
+  }
+
+  if (!fileBase64) {
+    throw new Error('Файл не містить даних');
+  }
+
+  const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  const lowerName = (fileName || '').toLowerCase();
+
+  if (lowerName.endsWith('.docx')) {
+    const docxResult = await mammoth.extractRawText({ buffer });
+    return docxResult.value || '';
+  }
+
+  if (lowerName.endsWith('.pdf')) {
+    const parser = new PDFParse({ data: buffer });
+    const textResult = await parser.getText();
+    return textResult.text || '';
+  }
+
+  if (lowerName.endsWith('.json')) {
+    const jsonStr = buffer.toString('utf-8');
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.form028 || parsed.patient) {
+        const parts: string[] = [];
+        if (parsed.patient?.fullName) parts.push(`Пацієнт: ${parsed.patient.fullName}`);
+        if (parsed.patient?.age) parts.push(`Вік / Дата народження: ${parsed.patient.age}`);
+        if (parsed.patient?.consultationDate) parts.push(`Дата огляду: ${parsed.patient.consultationDate}`);
+        if (parsed.form028?.diagnosisCode || parsed.form028?.diagnosisDescription) {
+          parts.push(`Діагноз: ${parsed.form028.diagnosisCode || ''} ${parsed.form028.diagnosisDescription || ''}`);
+        }
+        if (parsed.form028?.anamnesisVitaeSection) {
+          parts.push(`Анамнез життя: ${parsed.form028.anamnesisVitaeSection}`);
+        }
+        if (parsed.form028?.anamnesisMorbiSection) {
+          parts.push(`Анамнез захворювання: ${parsed.form028.anamnesisMorbiSection}`);
+        }
+        if (parsed.form028?.recommendationsSection) {
+          parts.push(`Призначена терапія / рекомендації: ${parsed.form028.recommendationsSection}`);
+        }
+        if (parsed.form028?.objectiveStatusSection) {
+          parts.push(`Об'єктивний стан: ${parsed.form028.objectiveStatusSection}`);
+        }
+        return parts.join('\n\n');
+      }
+      return jsonStr;
+    } catch {
+      return jsonStr;
+    }
+  }
+
+  return buffer.toString('utf-8');
+}
+
+// Helper: Extract structured clinical history and psychiatry facts from text
+function parseClinicalHistoryData(rawText: string, fileName: string = '') {
+  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  // 1. Patient Name
+  let patientName = '';
+  const namePatterns = [
+    /(?:пацієнт(?:ка)?|піб|прізвище,?\s*ім'?я(?:\s*та\s*по\s*батькові)?|хворий|хвора)[:\s]+([А-ЯІЇЄҐ][а-яіїєґ']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ']+){1,2})/i,
+    /(?:1\.\s*Прізвище,?\s*ім'?я)[:\s]+([А-ЯІЇЄҐ][а-яіїєґ']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ']+){1,2})/i,
+    /([А-ЯІЇЄҐ][а-яіїєґ']+\s+[А-ЯІЇЄҐ][а-яіїєґ']+\s+[А-ЯІЇЄҐ][а-яіїєґ']+)/,
+  ];
+
+  for (const pat of namePatterns) {
+    for (const line of lines.slice(0, 30)) {
+      if (
+        line.toLowerCase().includes('віленчик') ||
+        line.toLowerCase().includes('vilenchyk') ||
+        line.toLowerCase().includes('лікар')
+      ) {
+        continue;
+      }
+      const m = line.match(pat);
+      if (m && m[1]) {
+        patientName = m[1].trim();
+        break;
+      }
+    }
+    if (patientName) break;
+  }
+
+  // 2. Date of Birth
+  let dob = '';
+  const dobPatterns = [
+    /(?:дата\s*народження|д\.?н\.?|народив(?:ся|лась)|р\.?н\.?)[:\s]*(\d{2}[./-]\d{2}[./-]\d{4})/i,
+    /(\d{2}[./-]\d{2}[./-]\d{4})\s*(?:р\.?н\.?|року\s+народження)/i,
+    /(\d{2}\.\d{2}\.\d{4})/,
+  ];
+
+  for (const pat of dobPatterns) {
+    for (const line of lines.slice(0, 35)) {
+      const m = line.match(pat);
+      if (m && m[1]) {
+        dob = m[1].replace(/[-/]/g, '.');
+        break;
+      }
+    }
+    if (dob) break;
+  }
+
+  // 3. Consultation Date
+  let consultationDate = '';
+  for (const line of lines) {
+    if (line.includes('14.02.2012') || line.includes('19.10.2015')) continue; // Skip MOH decree dates
+    const m = line.match(/(?:дата\s*(?:звернення|консультації|огляду)|висновок\s+від|від)[:\s]*(\d{2}[./-]\d{2}[./-]\d{4})/i);
+    if (m && m[1]) {
+      consultationDate = m[1].replace(/[-/]/g, '.');
+      break;
+    }
+  }
+
+  // 4. Past Diagnosis (ICD-10)
+  let pastDiagnosisCode = '';
+  let pastDiagnosisDescription = '';
+  const diagMatch = rawText.match(/(?:діагноз|шифр\s*мкх|мкх-10|код)[:\s]*([Ff]\d{2}(?:\.\d{1,2})?)[^.\n]*?(?:[:\s\-—]+([^\n.]+))?/i);
+  if (diagMatch) {
+    pastDiagnosisCode = diagMatch[1].toUpperCase();
+    if (diagMatch[2]) {
+      pastDiagnosisDescription = diagMatch[2].trim();
+    }
+  } else {
+    const icdOnly = rawText.match(/\b([Ff]\d{2}(?:\.\d{1,2})?)\b/);
+    if (icdOnly) {
+      pastDiagnosisCode = icdOnly[1].toUpperCase();
+    }
+  }
+
+  // 5. Past Anamnesis Vitae (Section 6)
+  let anamnesisVitae = '';
+  const vitaeMatch = rawText.match(/(?:6\.\s*Анамнез\s*життя|Анамнез\s*життя)[:\s]*([\s\S]*?)(?=(?:\n\s*(?:7\.|Об'єктивний|Статус|Діагноз)|\n\n\n|$))/i);
+  if (vitaeMatch && vitaeMatch[1]) {
+    anamnesisVitae = vitaeMatch[1].trim();
+  }
+
+  // 6. Past Therapy & Recommendations
+  let pastTherapy = '';
+  const recMatch = rawText.match(/(?:9\.\s*Рекомендації|Рекомендації|Призначення|Фармакотерапія|Лікування|Схема\s*лікування)[:\s]*([\s\S]*?)(?=(?:\n\s*(?:10\.|Лікар|М\.\s*П\.|Печатка|Дата|Підпис)|\n\n\n|$))/i);
+  if (recMatch && recMatch[1]) {
+    pastTherapy = recMatch[1].trim();
+  } else {
+    const medRegex = /(?:есциталопрам|сертралін|золофт|пароксетин|флуоксетин|ципралекс|паксил|венлафаксин|велаксин|дулоксетин|симбалта|міртазапін|міртел|тразодон|триттіко|прегабалін|лірика|гідазепам|клоназепам|ксанакс|алпразолам|кветіапін|сероквель|оланзапін|арипіпразол|ламотриджин|ламіктал|вальпроат|депакін|літій|бупропіон|атомоксетин|страттера)[^.;\n]*/gi;
+    const medsFound = rawText.match(medRegex);
+    if (medsFound && medsFound.length > 0) {
+      pastTherapy = Array.from(new Set(medsFound.map((m) => m.trim()))).join('; ');
+    }
+  }
+
+  const summaryParts: string[] = [];
+  if (consultationDate) summaryParts.push(`Огляд від ${consultationDate}`);
+  if (pastDiagnosisCode) summaryParts.push(`Діагноз: ${pastDiagnosisCode}${pastDiagnosisDescription ? ` (${pastDiagnosisDescription})` : ''}`);
+  if (pastTherapy) summaryParts.push(`Попередня терапія: ${pastTherapy.replace(/\n+/g, ' ').slice(0, 150)}`);
+
+  return {
+    patientName,
+    dob,
+    pastDiagnosisCode,
+    pastDiagnosisDescription,
+    pastTherapy: pastTherapy.slice(0, 1000),
+    anamnesisVitae: anamnesisVitae.slice(0, 1000),
+    consultationDate,
+    summary: summaryParts.join(' | ') || `Документ: ${fileName}`,
+  };
+}
+
+// Endpoint: Parse History File (PDF, DOCX, MD, TXT, JSON)
+app.post('/api/parse-history-file', async (req: Request, res: Response) => {
+  try {
+    const { fileName, fileBase64, textContent } = req.body;
+    if (!fileBase64 && !textContent) {
+      return res.status(400).json({ ok: false, error: 'Файл або текст не передано' });
+    }
+
+    const rawText = await extractTextFromHistoryFile(fileName || 'history_document.txt', fileBase64, textContent);
+    if (!rawText || !rawText.trim()) {
+      return res.status(400).json({ ok: false, error: 'Не вдалося витягти текст із наданого файлу' });
+    }
+
+    const extracted = parseClinicalHistoryData(rawText, fileName);
+
+    return res.json({
+      ok: true,
+      fileName,
+      rawText: rawText.slice(0, 15000),
+      extracted,
+    });
+  } catch (err: any) {
+    console.error('Error parsing history file:', err);
+    return res.status(500).json({
+      ok: false,
+      error: `Помилка обробки файлу: ${err.message || 'Непідтримуваний формат'}`,
+    });
+  }
+});
+
 // Deep Psychiatric Clinical System Instructions
+function formatPsychometrics(psy: any): string {
+  if (!psy) return '';
+  if (typeof psy === 'string') return psy.trim();
+  if (typeof psy === 'object') {
+    const parts: string[] = [];
+    if (psy.phq9) parts.push(`PHQ-9 (депресія): ${psy.phq9}`);
+    if (psy.gad7) parts.push(`GAD-7 (тривога): ${psy.gad7}`);
+    if (psy.asrs) parts.push(`ASRS-6 (СДУГ): ${psy.asrs}`);
+    if (psy.audit) parts.push(`AUDIT (алкоголь): ${psy.audit}`);
+    if (psy.asrm) parts.push(`ASRM (манія/гіпоманія): ${psy.asrm}`);
+    if (psy.pid5) parts.push(`PID-5: ${psy.pid5}`);
+    if (psy.custom) parts.push(psy.custom);
+    for (const [k, v] of Object.entries(psy)) {
+      if (!['phq9', 'gad7', 'asrs', 'audit', 'asrm', 'pid5', 'custom'].includes(k) && v) {
+        parts.push(`${k}: ${v}`);
+      }
+    }
+    return parts.join('; ');
+  }
+  return String(psy).trim();
+}
+
+function errorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : 'Невідома помилка';
+  return raw
+    .replace(/AIza[0-9A-Za-z_-]{8,}/g, '[ключ]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[ключ]')
+    .slice(0, 500);
+}
+
 const CLINICAL_SYSTEM_INSTRUCTION = `
 Ви — провідний клінічний експерт та медичний асистент лікаря-психіатра для приватної психіатричної та наркологічної практики лікаря Віленчика Антона Павловича (ФОП Віленчик А.П., Ліцензія МОЗ України № 854 від 17.05.2024 р.).
 
@@ -230,47 +607,51 @@ app.post('/api/extract', async (req: Request, res: Response) => {
     const extracted = extractAllPossibleDialogue(req.body);
     const processedText = extracted.text;
     const metadata = extracted.meta;
-    const modelName = req.body?.modelName || 'gemini-2.5-flash';
+
+    const aiConfig = req.body?.aiConfig || {};
+    const provider: string = (aiConfig.provider || req.body?.aiProvider || 'gemini').toLowerCase();
+    const modelName = aiConfig.model || req.body?.modelName || req.body?.customModel || 'gemini-3.8-flash';
+    const customApiKey: string = (aiConfig.apiKey || '').trim();
+    const customBaseUrl: string = (aiConfig.baseUrl || '').trim();
     const formType = req.body?.formType || '028_o';
     const doctorNotes = req.body?.doctorNotes || metadata?.doctorNotes || '';
     const patientContext = req.body?.patientContext || metadata?.patientContext || {};
-    const psychometrics = req.body?.psychometrics || metadata?.psychometrics || '';
+    const psychometrics = formatPsychometrics(req.body?.psychometrics || metadata?.psychometrics || '');
     const followUpData = req.body?.followUpData || metadata?.followUpData || {};
+    const priorConsultationHistory = req.body?.priorConsultationHistory || metadata?.priorConsultationHistory || null;
 
-    // If completely empty dialogue, generate standard template
     if (!processedText || processedText.trim().length === 0) {
-      const emptyDoc = parseActualConsultationText(
-        'Пацієнт: Звернення за психіатричною консультацією.',
+      return res.status(400).json({
+        ok: false,
+        error: 'У записі немає тексту розмови.',
+      });
+    }
+
+    if (provider === 'offline') {
+      const localResult = parseActualConsultationText(
+        processedText,
         metadata,
         doctorNotes,
         patientContext,
         psychometrics,
-        followUpData
+        followUpData,
+        priorConsultationHistory
       );
       return res.json({
         ok: true,
-        source: 'local_clinical_parser',
-        data: emptyDoc,
+        source: 'text_only',
+        model: 'text-only',
+        data: localResult,
       });
     }
 
-    // Call Gemini with cascade: gemini-2.5-flash -> gemini-2.0-flash -> gemini-flash-latest
-    if (ai) {
-      const candidateModels = [
-        modelName,
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-flash-latest',
-      ];
-      const uniqueModels = Array.from(new Set(candidateModels));
+    const calculatedAge = patientContext.dob
+      ? formatAgeWithDob(patientContext.dob)
+      : 'У записі не зазначено (зі слів пацієнта)';
 
-      const calculatedAge = patientContext.dob
-        ? formatAgeWithDob(patientContext.dob)
-        : 'У записі не зазначено (зі слів пацієнта)';
+    const isFollowUp = followUpData.consultationType === 'повторна' || Boolean(priorConsultationHistory);
 
-      const isFollowUp = followUpData.consultationType === 'повторна';
-
-      const prompt = `
+    const prompt = `
 ВХІДНІ КЛІНІЧНІ ДАНІ ТА КОНТЕКСТ:
 - Назва зустрічі / файлу: ${metadata.title || metadata.fileName || 'Консультація'}
 - Дата консультації: ${metadata.date || new Date().toLocaleDateString('uk-UA')}
@@ -297,6 +678,21 @@ ${
     ? `- Попередня терапія та динаміка: """${followUpData.previousTherapyAndState}"""\n`
     : ''
 }
+${
+  priorConsultationHistory
+    ? `
+ДОКУМЕНТ ПОПЕРЕДНЬОГО ОГЛЯДУ / ЛОНГІТЮДНИЙ АНАМНЕЗ:
+- Попередній діагноз: ${priorConsultationHistory.pastDiagnosisCode || ''} ${priorConsultationHistory.pastDiagnosisDescription || ''}
+- Призначена попередня терапія: ${priorConsultationHistory.pastTherapy || 'Не вказана'}
+- Попередній анамнез життя (соматика, алергії, травми): ${priorConsultationHistory.anamnesisVitae || 'Без особливостей'}
+- Короткий зміст попереднього огляду: """${priorConsultationHistory.summary || ''}"""
+- Витяг із тексту попереднього документа:
+"""
+${(priorConsultationHistory.rawText || '').slice(0, 4000)}
+"""
+`
+    : ''
+}
 
 ПСИХОМЕТРИЧНІ ШКАЛИ (ТЕСТИ З БОТА):
 ${psychometrics ? `"""${psychometrics}"""` : 'Не проводилися або не надані'}
@@ -308,8 +704,96 @@ ${processedText.slice(0, 80000)}
 """
 
 ЗАВДАННЯ:
-Проаналізуйте прийом, врахуйте повний контекст, застосуйте надані дані пацієнта (patientContext), включіть психометричні шкали в об'єктивний статус, опишіть динаміку терапії (якщо прийом повторний), сформуйте офіційний медичний документ та поверніть валідний JSON.
+Проаналізуйте прийом, врахуйте повний контекст (включно з попереднім оглядом), застосуйте надані дані пацієнта (patientContext), включіть психометричні шкали в об'єктивний статус, опишіть динаміку терапії у розділі "Анамнез захворювання" (порівнявши з попереднім оглядом), сформуйте офіційний медичний документ та поверніть валідний JSON.
 `;
+
+    // 3. If OpenAI-compatible provider (OpenAI, Groq, DeepSeek, Custom)
+    if (['openai', 'groq', 'deepseek', 'custom'].includes(provider)) {
+      try {
+        console.log(`[AI Extract] Calling ${provider.toUpperCase()} with model ${modelName}`);
+        let baseUrl = customBaseUrl;
+        if (!baseUrl) {
+          if (provider === 'openai') baseUrl = 'https://api.openai.com/v1';
+          else if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
+          else if (provider === 'deepseek') baseUrl = 'https://api.deepseek.com';
+        }
+        const parsed = await callOpenAiCompatibleApi({
+          apiKey: customApiKey,
+          baseUrl,
+          model: modelName,
+          systemPrompt: CLINICAL_SYSTEM_INSTRUCTION,
+          userPrompt: prompt,
+        });
+
+        if (parsed && parsed.form028) {
+          if (patientContext.fullName && parsed.patient) {
+            parsed.patient.fullName = patientContext.fullName;
+          } else if (priorConsultationHistory?.patientName && parsed.patient) {
+            parsed.patient.fullName = priorConsultationHistory.patientName;
+          }
+
+          if (patientContext.dob && parsed.patient) {
+            parsed.patient.age = formatAgeWithDob(patientContext.dob);
+          } else if (priorConsultationHistory?.dob && parsed.patient) {
+            parsed.patient.age = formatAgeWithDob(priorConsultationHistory.dob);
+          } else if (calculatedAge && parsed.patient) {
+            parsed.patient.age = calculatedAge;
+          }
+
+          if (patientContext.pastHistory) {
+            parsed.form028.anamnesisVitaeSection = patientContext.pastHistory;
+          } else if (priorConsultationHistory?.anamnesisVitae) {
+            parsed.form028.anamnesisVitaeSection = priorConsultationHistory.anamnesisVitae;
+          }
+          if (psychometrics && !parsed.form028.objectiveStatusSection.includes('Психометричн')) {
+            parsed.form028.objectiveStatusSection += `\nПсихометричне обстеження (шкали): ${psychometrics}.`;
+          }
+          if (isFollowUp && followUpData.previousTherapyAndState && !parsed.form028.anamnesisMorbiSection.includes('Динаміка')) {
+            parsed.form028.anamnesisMorbiSection += `\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`;
+          }
+
+          console.log(`[AI Extract] Success with ${provider} (${modelName})`);
+          return res.json({
+            ok: true,
+            source: provider,
+            model: modelName,
+            data: parsed,
+          });
+        }
+        return res.status(502).json({
+          ok: false,
+          error: 'Модель повернула відповідь без документа.',
+        });
+      } catch (provErr: any) {
+        const message = errorText(provErr);
+        console.warn(`[AI Extract] ${provider} failed: ${message}`);
+        return res.status(502).json({
+          ok: false,
+          error: message,
+        });
+      }
+    }
+
+    let lastModelError = '';
+    const geminiClient = customApiKey
+      ? new GoogleGenAI({ apiKey: customApiKey })
+      : ai;
+
+    if (!geminiClient) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Ключ Google Gemini на сервері не налаштовано.',
+      });
+    }
+
+    if (geminiClient) {
+      const candidateModels = [
+        modelName || 'gemini-3.8-flash',
+        'gemini-3.8-flash',
+        'gemini-3.5-flash',
+        'gemini-flash-latest',
+      ].filter((m) => m && m !== 'gemini-2.5-flash' && m !== 'gemini-2.0-flash');
+      const uniqueModels = Array.from(new Set(candidateModels));
 
       const schemaConfig = {
         type: Type.OBJECT,
@@ -340,7 +824,6 @@ ${processedText.slice(0, 80000)}
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
               },
-              suicideRiskAssessment: { type: Type.STRING },
               verifiedQuotes: {
                 type: Type.ARRAY,
                 items: {
@@ -395,7 +878,7 @@ ${processedText.slice(0, 80000)}
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             console.log(`[AI Extract] Calling ${currentModel} (attempt ${attempt})...`);
-            const response = await ai.models.generateContent({
+            const response = await geminiClient.models.generateContent({
               model: currentModel,
               contents: prompt,
               config: {
@@ -409,17 +892,29 @@ ${processedText.slice(0, 80000)}
             if (response.text) {
               const parsed = JSON.parse(response.text);
 
-              // Ensure patientContext is strictly applied
+              // Ensure patientContext is strictly applied, fallback to priorConsultationHistory
               if (patientContext.fullName) {
                 parsed.patient.fullName = patientContext.fullName;
+              } else if (priorConsultationHistory?.patientName) {
+                parsed.patient.fullName = priorConsultationHistory.patientName;
               }
+
               if (patientContext.dob) {
                 parsed.patient.age = formatAgeWithDob(patientContext.dob);
+              } else if (priorConsultationHistory?.dob) {
+                parsed.patient.age = formatAgeWithDob(priorConsultationHistory.dob);
               }
+
               if (patientContext.pastHistory) {
                 parsed.form028.anamnesisVitaeSection = patientContext.pastHistory;
+              } else if (priorConsultationHistory?.anamnesisVitae) {
+                parsed.form028.anamnesisVitaeSection = priorConsultationHistory.anamnesisVitae;
               } else if (!parsed.form028.anamnesisVitaeSection) {
                 parsed.form028.anamnesisVitaeSection = 'У записі не зазначено (зі слів пацієнта)';
+              }
+
+              if (parsed.patient?.fullName && (!parsed.form028.patientSection || parsed.form028.patientSection.includes('Не зазначено'))) {
+                parsed.form028.patientSection = `${parsed.patient.fullName}, ${parsed.patient.age || ''}`.trim();
               }
 
               // Weave psychometrics if not already included
@@ -432,7 +927,7 @@ ${processedText.slice(0, 80000)}
                 parsed.form028.anamnesisMorbiSection += `\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`;
               }
 
-              console.log(`[AI Extract] Success with ${currentModel} for ${parsed.patient?.fullName}`);
+              console.log(`[AI Extract] Success with ${currentModel}`);
               return res.json({
                 ok: true,
                 source: 'gemini',
@@ -441,7 +936,8 @@ ${processedText.slice(0, 80000)}
               });
             }
           } catch (err: any) {
-            console.warn(`[AI Extract] ${currentModel} attempt ${attempt} failed:`, err?.status || err?.message);
+            lastModelError = errorText(err);
+            console.warn(`[AI Extract] ${currentModel} attempt ${attempt} failed: ${lastModelError}`);
             if (attempt === 1) {
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
@@ -450,48 +946,29 @@ ${processedText.slice(0, 80000)}
       }
     }
 
-    // High-fidelity fallback parser incorporating context, psychometrics & followUp
-    console.log('[AI Extract] Using high-fidelity contextual local parser');
-    const localResult = parseActualConsultationText(
-      processedText,
-      metadata,
-      doctorNotes,
-      patientContext,
-      psychometrics,
-      followUpData
-    );
-    return res.json({
-      ok: true,
-      source: 'local_clinical_parser',
-      model: 'contextual-local-engine',
-      data: localResult,
+    return res.status(502).json({
+      ok: false,
+      error: lastModelError || 'Модель не повернула висновок.',
     });
   } catch (error: any) {
-    console.error('Unhandled extract error:', error);
-    const emergencyDoc = parseActualConsultationText(
-      'Консультація лікаря-психіатра',
-      {},
-      '',
-      {},
-      '',
-      {}
-    );
-    return res.json({
-      ok: true,
-      source: 'local_emergency_parser',
-      data: emergencyDoc,
+    const message = errorText(error);
+    console.error(`[AI Extract] ${message}`);
+    return res.status(500).json({
+      ok: false,
+      error: message,
     });
   }
 });
 
-// Dynamic parser on actual text with patientContext, psychometrics and follow-up
+// Dynamic parser on actual text with patientContext, psychometrics, follow-up and prior history
 function parseActualConsultationText(
   rawText: string,
   metadata: any,
   doctorNotes: string = '',
   patientContext: any = {},
   psychometrics: string = '',
-  followUpData: any = {}
+  followUpData: any = {},
+  priorConsultationHistory: any = null
 ) {
   const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
   const now = new Date();
@@ -500,7 +977,7 @@ function parseActualConsultationText(
     now.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
   // 1. Patient Name
-  let patientName = patientContext.fullName || '';
+  let patientName = patientContext.fullName || priorConsultationHistory?.patientName || '';
 
   if (!patientName && metadata?.title) {
     const titleMatch = metadata.title.match(
@@ -562,12 +1039,15 @@ function parseActualConsultationText(
   // 2. Age / Date of birth
   const patientAge = patientContext.dob
     ? formatAgeWithDob(patientContext.dob)
+    : priorConsultationHistory?.dob
+    ? formatAgeWithDob(priorConsultationHistory.dob)
     : metadata?.age || 'У записі не зазначено (зі слів пацієнта)';
 
   // 3. Section 6: Anamnesis Vitae
-  const anamnesisVitae = patientContext.pastHistory
-    ? patientContext.pastHistory
-    : 'У записі не зазначено (зі слів пацієнта)';
+  const anamnesisVitae =
+    patientContext.pastHistory ||
+    priorConsultationHistory?.anamnesisVitae ||
+    'У записі не зазначено (зі слів пацієнта)';
 
   // 4. Utterances & Complaints
   const patientUtterances: string[] = [];
@@ -594,83 +1074,69 @@ function parseActualConsultationText(
     if (u.length > 20 && quotesList.length < 2) {
       quotesList.push({
         speaker: patientName,
-        text: `«${u.slice(0, 160)}...»`,
-        significance: 'Ключовий фрагмент бесіди',
+        text: u.length > 160 ? `«${u.slice(0, 160)}...»` : `«${u}»`,
+        significance: '',
       });
     }
   }
 
-  if (complaintsList.length === 0) {
-    complaintsList.push(
-      patientUtterances[0] ||
-        'Скарги на психоемоційне напруження, лабільність настрою та порушення сну.'
+  const isFollowUp = followUpData.consultationType === 'повторна' || Boolean(priorConsultationHistory);
+  const anamnesisParts: string[] = [];
+  if (priorConsultationHistory?.pastDiagnosisCode || priorConsultationHistory?.pastDiagnosisDescription) {
+    anamnesisParts.push(
+      `Раніше: ${[priorConsultationHistory.pastDiagnosisCode, priorConsultationHistory.pastDiagnosisDescription].filter(Boolean).join(' ')}`
     );
   }
-
-  const isFollowUp = followUpData.consultationType === 'повторна';
-  let anamnesisMorbi = `Зі слів пацієнта та стенограми консультації: скарги розвивалися поступово на фоні психоемоційного навантаження.`;
-  if (isFollowUp && followUpData.previousTherapyAndState) {
-    anamnesisMorbi += ` Повторний прийом: оцінка динаміки на фоні призначеної терапії (${followUpData.previousTherapyAndState}). Відзначається позитивна терапевтична відповідь, редукція вегетативних пароксизмів.`;
+  if (priorConsultationHistory?.pastTherapy) {
+    anamnesisParts.push(`Раніше отримувана фармакотерапія: ${priorConsultationHistory.pastTherapy}`);
+  }
+  if (followUpData.previousTherapyAndState) {
+    anamnesisParts.push(String(followUpData.previousTherapyAndState).trim());
   }
   if (doctorNotes) {
-    anamnesisMorbi += ` Додатковий контекст: ${doctorNotes}.`;
+    anamnesisParts.push(String(doctorNotes).trim());
   }
 
-  let objectiveStatus =
-    'Свідомість ясна. Орієнтований(-а) вірно. Контакт продуктивний. Фон настрою знижений, тривожний. Мислення логічне, послідовне. Обмани сприйняття заперечує. Критика до власного стану збережена. Суїцидальний ризик низький (наміри заперечує).';
-  if (psychometrics) {
-    objectiveStatus += `\nПсихометричне тестування: ${psychometrics}.`;
-  }
-
-  let recommendations =
-    '1. Дотримання режиму праці, повноцінного сну та відпочинку.\n2. Раціональна психіатрична корекція та спостереження лікаря-психіатра.';
-  if (isFollowUp) {
-    recommendations += '\n3. Продовження підтримуючого курсу фармакотерапії з оптимізацією дозування.\n4. Контрольний огляд у динаміці через 3-4 тижні.';
-  } else {
-    recommendations += '\n3. Контрольний огляд у динаміці за 14-21 день.';
-  }
+  const formattedPsy = typeof psychometrics === 'object' ? formatPsychometrics(psychometrics) : String(psychometrics || '').trim();
 
   return {
     patient: {
       fullName: patientName,
       age: patientAge,
-      gender: 'За даними консультації',
+      gender: '',
       consultationDate: dateStr,
-      consultationType: isFollowUp ? 'Повторна (телемедична) консультація' : 'Онлайн (телемедична консультація)',
+      consultationType: isFollowUp ? 'Повторна консультація' : 'Первинна консультація',
     },
     facts: {
-      utteranceCount: lines.length || 1,
+      utteranceCount: lines.length,
       chiefComplaints: complaintsList,
-      historyTimeline: `Симптоми виникли за словами пацієнта відповідно до стенограми консультації (${lines.length} реплік у файлі).`,
-      sleepQuality: 'Порушення сну зазначені у стенограмі бесіди.',
-      somaticSymptoms: 'Соматовегетативні прояви відповідно до наданого діалогу.',
-      medicationsMentioned: ['Без додаткових препаратів за винятком озвучених у тексті'],
-      suicideRiskAssessment:
-        'Суїцидальні думки та наміри за наданими репліками не підтверджені. Суїцидальний ризик низький.',
+      historyTimeline: '',
+      sleepQuality: '',
+      somaticSymptoms: '',
+      medicationsMentioned: [],
+      suicideRiskAssessment: '',
       verifiedQuotes: quotesList,
-      psychometrics,
-      followUpDynamics: isFollowUp ? followUpData.previousTherapyAndState : undefined,
+      psychometrics: formattedPsy,
+      followUpDynamics: followUpData.previousTherapyAndState || undefined,
     },
     form028: {
-      documentNumber: `2026/${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-        Math.floor(Math.random() * 800) + 100
-      )}`,
+      documentNumber: '',
       doctorHeader: `${PRACTICE_INFO.practiceName}\n${PRACTICE_INFO.licenseNumber}\nЛікар-психіатр, нарколог: ${PRACTICE_INFO.doctorName}`,
       patientSection: `${patientName}. Дата звернення: ${dateStr}.`,
       complaintsSection: complaintsList.join('; '),
-      anamnesisMorbiSection: anamnesisMorbi,
+      anamnesisMorbiSection: anamnesisParts.join('\n'),
       anamnesisVitaeSection: anamnesisVitae,
-      objectiveStatusSection: objectiveStatus,
+      objectiveStatusSection: formattedPsy ? `Психометричне обстеження: ${formattedPsy}.` : '',
       laboratorySection: 'На момент консультації даних лабораторних та інструментальних досліджень не надано.',
-      diagnosisCode: 'F41.2',
-      diagnosisDescription: 'Змішаний тривожний та депресивний розлад (F41.2 за МКХ-10).',
-      recommendationsSection: recommendations,
-      disabilityNote: 'Працездатність збережена.',
-      nextAppointmentDate: isFollowUp ? 'Через 3-4 тижні' : 'За узгодженням (14-21 день)',
-      telemedDuration: '45 хвилин',
-      telemedChannel: 'Захищений відеоконференцзв\'язок',
-      extractRecipient: 'За місцем вимоги / Сімейному лікарю / ВЛК',
-      treatmentPeriod: `з ${dateStr} по теперішній час`,
+      diagnosisCode: '',
+      diagnosisDescription: '',
+      recommendationsSection: '',
+      disabilityNote: '',
+      nextAppointmentDate: '',
+      telemedDuration: '',
+      telemedChannel: '',
+      extractRecipient: '',
+      treatmentPeriod: '',
     },
   };
 }
@@ -760,7 +1226,7 @@ function buildDocxDocument(form028: any, patient: any, formType: string = '028_o
     paragraphs.push(
       createFieldParagraph(
         'В (найменування закладу, куди направляється): ',
-        form028.extractRecipient || 'За місцем вимоги / Сімейному лікарю / ВЛК',
+        form028.extractRecipient || '',
         true
       )
     );
@@ -789,17 +1255,17 @@ function buildDocxDocument(form028: any, patient: any, formType: string = '028_o
         ? form028.treatmentPeriod || `Консультація від ${patient?.consultationDate}`
         : formType === '002_tm'
         ? 'Телемедичне консультування (відеоконференцзв\'язок)'
-        : patient?.consultationType || 'Онлайн (телемедична консультація)',
+        : patient?.consultationType || '',
       false
     )
   );
 
   if (formType === '002_tm') {
     paragraphs.push(
-      createFieldParagraph('Тривалість телемедичного сеансу: ', form028.telemedDuration || '45 хвилин', false)
+      createFieldParagraph('Тривалість телемедичного сеансу: ', form028.telemedDuration || '', false)
     );
     paragraphs.push(
-      createFieldParagraph('Технічний засіб зв\'язку: ', form028.telemedChannel || 'Захищений відеоконференцзв\'язок', false)
+      createFieldParagraph('Технічний засіб зв\'язку: ', form028.telemedChannel || '', false)
     );
   }
 
@@ -826,7 +1292,7 @@ function buildDocxDocument(form028: any, patient: any, formType: string = '028_o
           font: 'Times New Roman',
         }),
         new TextRun({
-          text: `[${form028.diagnosisCode || 'F41.2'}] ${form028.diagnosisDescription || ''}`,
+          text: [form028.diagnosisCode, form028.diagnosisDescription].filter(Boolean).join(' '),
           bold: true,
           underline: {},
           size: 22,
@@ -843,8 +1309,8 @@ function buildDocxDocument(form028: any, patient: any, formType: string = '028_o
       false
     )
   );
-  paragraphs.push(createFieldParagraph('11. Працездатність: ', form028.disabilityNote || 'Збережена', false));
-  paragraphs.push(createFieldParagraph('12. Термін повторної явки: ', form028.nextAppointmentDate || 'За узгодженням', false));
+  paragraphs.push(createFieldParagraph('11. Працездатність: ', form028.disabilityNote || '', false));
+  paragraphs.push(createFieldParagraph('12. Термін повторної явки: ', form028.nextAppointmentDate || '', false));
 
   // ONLY circle for M.P. without signature line
   paragraphs.push(
@@ -1013,7 +1479,7 @@ app.post('/api/send-telegram', async (req: Request, res: Response) => {
   }
 });
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {

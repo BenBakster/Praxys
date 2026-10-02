@@ -101,12 +101,16 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
           <h4 className="text-xs font-semibold text-gray-900">1. Тверді скарги з розмови</h4>
         </div>
         <ul className="space-y-1.5 text-xs text-gray-700">
-          {facts.chiefComplaints.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5 shrink-0" />
-              <span className="leading-snug">{item}</span>
-            </li>
-          ))}
+          {(facts.chiefComplaints || []).length > 0 ? (
+            facts.chiefComplaints.map((item, idx) => (
+              <li key={idx} className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5 shrink-0" />
+                <span className="leading-snug">{item}</span>
+              </li>
+            ))
+          ) : (
+            <li className="text-gray-500">У тексті окремих скарг не виділено.</li>
+          )}
         </ul>
       </div>
 
@@ -116,9 +120,13 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
           <Clock className="w-4 h-4 text-amber-500" />
           <h4 className="text-xs font-semibold text-gray-900">2. Хронологія та провокуючі фактори</h4>
         </div>
-        <p className="text-xs text-gray-700 leading-relaxed bg-amber-50/30 p-2.5 rounded-lg border border-amber-100">
-          {facts.historyTimeline}
-        </p>
+        {facts.historyTimeline ? (
+          <p className="text-xs text-gray-700 leading-relaxed bg-amber-50/30 p-2.5 rounded-lg border border-amber-100">
+            {facts.historyTimeline}
+          </p>
+        ) : (
+          <p className="text-xs text-gray-500">Не виділено.</p>
+        )}
       </div>
 
       {/* Section 3: Sleep & Somatics */}
@@ -128,7 +136,7 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
             <Moon className="w-3.5 h-3.5 text-indigo-500" />
             <h5 className="text-[11px] font-semibold text-gray-900">Якість сну</h5>
           </div>
-          <p className="text-[11px] text-gray-600 leading-snug">{facts.sleepQuality}</p>
+          <p className="text-[11px] text-gray-600 leading-snug">{facts.sleepQuality || 'Не виділено.'}</p>
         </div>
 
         <div className="bg-white rounded-xl p-3 border border-gray-200 shadow-2xs">
@@ -136,7 +144,7 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
             <HeartPulse className="w-3.5 h-3.5 text-orange-500" />
             <h5 className="text-[11px] font-semibold text-gray-900">Соматичні прояви</h5>
           </div>
-          <p className="text-[11px] text-gray-600 leading-snug">{facts.somaticSymptoms}</p>
+          <p className="text-[11px] text-gray-600 leading-snug">{facts.somaticSymptoms || 'Не виділено.'}</p>
         </div>
       </div>
 
@@ -163,20 +171,21 @@ export const FactsColumn: React.FC<FactsColumnProps> = ({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-gray-500 italic">Жодних лікарських засобів не озвучувалося.</p>
+          <p className="text-xs text-gray-500 italic">Не виділено.</p>
         )}
       </div>
 
-      {/* Section 5: Suicide Risk Assessment */}
-      <div className="bg-white rounded-xl p-3.5 border border-gray-200 shadow-2xs">
-        <div className="flex items-center gap-2 mb-1.5">
-          <LifeBuoy className="w-4 h-4 text-emerald-600" />
-          <h4 className="text-xs font-semibold text-gray-900">4. Суїцидальний ризик</h4>
+      {facts.suicideRiskAssessment ? (
+        <div className="bg-white rounded-xl p-3.5 border border-gray-200 shadow-2xs">
+          <div className="flex items-center gap-2 mb-1.5">
+            <LifeBuoy className="w-4 h-4 text-emerald-600" />
+            <h4 className="text-xs font-semibold text-gray-900">4. Суїцидальний ризик</h4>
+          </div>
+          <p className="text-xs text-gray-700 leading-relaxed bg-emerald-50/40 p-2.5 rounded-lg border border-emerald-100">
+            {facts.suicideRiskAssessment}
+          </p>
         </div>
-        <p className="text-xs text-gray-700 leading-relaxed bg-emerald-50/40 p-2.5 rounded-lg border border-emerald-100">
-          {facts.suicideRiskAssessment}
-        </p>
-      </div>
+      ) : null}
 
       {/* Section 6: Verified Quotes */}
       {facts.verifiedQuotes && facts.verifiedQuotes.length > 0 && (

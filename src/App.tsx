@@ -8,11 +8,13 @@ import {
 import { FactsColumn } from './components/FactsColumn';
 import { MedicalDocumentA4 } from './components/MedicalDocumentA4';
 import { TelegramModal } from './components/TelegramModal';
+import { AiSettingsModal } from './components/AiSettingsModal';
 import {
   ConsultationResult,
   Form028Data,
   PatientInfo,
   FormType,
+  AiConfig,
 } from './types/clinical';
 import { DEMO_CONSULTATION_RESULT, DEMO_RAW_TRANSCRIPT } from './data/demoData';
 import {
@@ -27,7 +29,18 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [aiConfig, setAiConfig] = useState<AiConfig>(() => {
+    try {
+      const saved = localStorage.getItem('praxis_ai_config');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      provider: 'gemini',
+      model: 'gemini-3.8-flash',
+    };
+  });
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
   const [currentFormType, setCurrentFormType] = useState<FormType>('028_o');
   const [isProcessing, setIsProcessing] = useState(false);
   const [consultationData, setConsultationData] = useState<ConsultationResult | null>(null);
@@ -46,7 +59,15 @@ export default function App() {
     }, 4500);
   };
 
-  // Process consultation transcript or raw JSON via server API
+  const handleSaveAiConfig = (newConfig: AiConfig) => {
+    setAiConfig(newConfig);
+    setSelectedModel(newConfig.model);
+    try {
+      localStorage.setItem('praxis_ai_config', JSON.stringify(newConfig));
+    } catch (e) {}
+    showToast(`ШІ перемкнено на: ${newConfig.provider.toUpperCase()} (${newConfig.model})`);
+  };
+
   const handleProcessTranscript = async (
     transcript: string,
     metadata?: any,
@@ -55,7 +76,8 @@ export default function App() {
     doctorNotes?: string,
     patientContext?: PatientContextData,
     psychometrics?: string,
-    followUpData?: ConsultationModeData
+    followUpData?: ConsultationModeData,
+    priorConsultationHistory?: any
   ) => {
     setIsProcessing(true);
     setRawTranscript(transcript);
@@ -70,12 +92,14 @@ export default function App() {
         transcript,
         rawJson: rawJson || undefined,
         metadata: metadata || {},
-        modelName: selectedModel,
+        modelName: aiConfig.model || selectedModel,
+        aiConfig,
         formType,
         doctorNotes: doctorNotes || '',
         patientContext: patientContext || {},
         psychometrics: psychometrics || '',
         followUpData: followUpData || {},
+        priorConsultationHistory: priorConsultationHistory || undefined,
       };
 
       if (rawJson && typeof rawJson === 'object') {
@@ -96,8 +120,16 @@ export default function App() {
         const patientName = result.data.patient?.fullName || 'Пацієнт';
         const sourceName =
           result.source === 'gemini'
-            ? result.model || selectedModel
-            : 'Клінічний аналіз';
+            ? `Google ${result.model || aiConfig.model}`
+            : result.source === 'openai'
+            ? `OpenAI ${result.model || aiConfig.model}`
+            : result.source === 'groq'
+            ? `Groq ${result.model || aiConfig.model}`
+            : result.source === 'deepseek'
+            ? `DeepSeek ${result.model || aiConfig.model}`
+            : result.source === 'text_only'
+            ? 'Лише текст запису, без діагнозу'
+            : result.model || 'Клінічний аналіз';
         showToast(`Успішно сформовано для: ${patientName} (${sourceName})!`);
       } else {
         throw new Error(result.error || 'Не вдалося структурувати дані');
@@ -250,8 +282,13 @@ ${doc.recommendationsSection}
     <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-[#1F1F1F]">
       {/* Top Application Header */}
       <Header
-        selectedModel={selectedModel}
-        onSelectModel={setSelectedModel}
+        selectedModel={aiConfig.model || selectedModel}
+        onSelectModel={(m) => {
+          setSelectedModel(m);
+          setAiConfig((prev) => ({ ...prev, model: m }));
+        }}
+        aiConfig={aiConfig}
+        onOpenSettings={() => setSettingsModalOpen(true)}
         onPrint={handlePrint}
         onExportDocx={handleExportDocx}
         onSendTelegram={handleSendTelegram}
@@ -402,6 +439,14 @@ ${doc.recommendationsSection}
           customMessage={telegramResponseMsg}
         />
       )}
+
+      {/* AI Settings & Multi-Provider Modal */}
+      <AiSettingsModal
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        config={aiConfig}
+        onSaveConfig={handleSaveAiConfig}
+      />
     </div>
   );
 }

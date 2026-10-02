@@ -8,11 +8,17 @@ import {
   ChevronDown,
   Check,
   RefreshCw,
+  Settings,
+  Bot,
+  WifiOff,
 } from 'lucide-react';
+import { AiConfig } from '../types/clinical';
 
 interface HeaderProps {
   selectedModel: string;
   onSelectModel: (model: string) => void;
+  aiConfig?: AiConfig;
+  onOpenSettings: () => void;
   onPrint: () => void;
   onExportDocx: () => void;
   onSendTelegram: () => void;
@@ -24,6 +30,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   selectedModel,
   onSelectModel,
+  aiConfig,
+  onOpenSettings,
   onPrint,
   onExportDocx,
   onSendTelegram,
@@ -35,16 +43,16 @@ export const Header: React.FC<HeaderProps> = ({
 
   const models = [
     {
-      id: 'gemini-2.5-flash',
-      name: 'Google Gemini 2.5 Flash',
+      id: 'gemini-3.8-flash',
+      name: 'Google Gemini 3.8 Flash',
       badge: 'Основна',
-      desc: 'Основна клінічна модель Google для структурування за Формою № 028/о',
+      desc: 'Найновіша клінічна модель Google для структурування за Формою № 028/о',
     },
     {
-      id: 'gemini-2.0-flash',
-      name: 'Google Gemini 2.0 Flash',
+      id: 'gemini-3.5-flash',
+      name: 'Google Gemini 3.5 Flash',
       badge: 'Швидка',
-      desc: 'Швидка додаткова модель для миттєвої обробки стенограм',
+      desc: 'Швидка та точна модель для миттєвої обробки стенограм',
     },
   ];
 
@@ -71,59 +79,41 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Center: Model Selector & Status */}
+        {/* Center: Model Selector & Settings */}
         <div className="hidden md:flex items-center gap-2.5">
-          <div className="relative">
-            <button
-              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50/70 hover:bg-gray-100 text-gray-800 text-xs font-medium transition-colors shadow-2xs"
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
+          <button
+            onClick={onOpenSettings}
+            title="Налаштування ШІ та зміна провайдера (Gemini / OpenAI / Groq / Офлайн)"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50/80 hover:bg-gray-100 text-gray-800 text-xs font-medium transition-colors shadow-2xs group cursor-pointer"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            {aiConfig?.provider === 'offline' ? (
+              <WifiOff className="w-3.5 h-3.5 text-emerald-600" />
+            ) : (
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>{models.find((m) => m.id === selectedModel)?.name || 'Gemini 2.5 Flash'}</span>
-              <ChevronDown className="w-3 h-3 text-gray-400" />
-            </button>
-
-            {modelDropdownOpen && (
-              <div className="absolute left-0 mt-1.5 w-76 bg-white rounded-xl shadow-xl border border-gray-200/90 py-1.5 z-50 text-left">
-                <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-gray-400 uppercase">
-                  Моделі Google
-                </div>
-                {models.map((model) => (
-                  <button
-                    key={model.id}
-                    onClick={() => {
-                      onSelectModel(model.id);
-                      setModelDropdownOpen(false);
-                    }}
-                    className={`w-full px-3 py-2 text-left flex items-start gap-2.5 hover:bg-gray-50 transition-colors ${
-                      selectedModel === model.id ? 'bg-blue-50/60' : ''
-                    }`}
-                  >
-                    <div className="mt-0.5">
-                      {selectedModel === model.id ? (
-                        <Check className="w-4 h-4 text-blue-600" />
-                      ) : (
-                        <div className="w-4 h-4" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-medium text-gray-900">{model.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-normal">
-                          {model.badge}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-gray-500 leading-tight mt-0.5">{model.desc}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
             )}
-          </div>
+            <span className="font-semibold text-gray-900">
+              {aiConfig?.provider === 'openai'
+                ? 'OpenAI'
+                : aiConfig?.provider === 'groq'
+                ? 'Groq'
+                : aiConfig?.provider === 'deepseek'
+                ? 'DeepSeek'
+                : aiConfig?.provider === 'offline'
+                ? 'Без моделі'
+                : 'Google Gemini'}:
+            </span>
+            <span className="text-gray-600 font-mono text-[11px]">
+              {aiConfig?.model || selectedModel}
+            </span>
+            <span className="text-[10px] text-blue-700 bg-blue-100/70 px-1.5 py-0.5 rounded font-medium border border-blue-200 group-hover:bg-blue-200 transition-colors flex items-center gap-1">
+              <Settings className="w-3 h-3" />
+              <span>Змінити ШІ</span>
+            </span>
+          </button>
 
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 text-[11px] border border-emerald-200/60">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -174,6 +164,16 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Send className="w-3.5 h-3.5 text-sky-500" />
             <span className="hidden sm:inline">В Telegram</span>
+          </button>
+
+          {/* AI Settings Button */}
+          <button
+            onClick={onOpenSettings}
+            title="Налаштування ШІ: зміна постачальника (Gemini / OpenAI / Groq / Офлайн)"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors"
+          >
+            <Settings className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden lg:inline">Налаштування ШІ</span>
           </button>
         </div>
       </div>

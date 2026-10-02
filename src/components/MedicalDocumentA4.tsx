@@ -198,7 +198,8 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                 <span className="font-bold">В (найменування закладу / за місцем вимоги):</span>
                 <input
                   type="text"
-                  value={form028.extractRecipient || 'За місцем вимоги / Сімейному лікарю / ВЛК'}
+                  value={form028.extractRecipient || ''}
+                  placeholder="Куди направляється виписка"
                   onChange={(e) => onUpdateForm({ extractRecipient: e.target.value })}
                   className="flex-1 font-semibold border-b border-dashed border-gray-400 hover:border-gray-800 focus:border-blue-600 outline-none bg-transparent px-1"
                 />
@@ -266,7 +267,8 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                 <span className="font-bold text-[10pt]">Тривалість сеансу:</span>
                 <input
                   type="text"
-                  value={form028.telemedDuration || '45 хвилин'}
+                  value={form028.telemedDuration || ''}
+                  placeholder="тривалість"
                   onChange={(e) => onUpdateForm({ telemedDuration: e.target.value })}
                   className="flex-1 border-b border-dashed border-gray-300 outline-none bg-transparent px-1 text-[10pt]"
                 />
@@ -275,7 +277,8 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
                 <span className="font-bold text-[10pt]">Засіб зв'язку:</span>
                 <input
                   type="text"
-                  value={form028.telemedChannel || 'Захищений відеоконференцзв\'язок'}
+                  value={form028.telemedChannel || ''}
+                  placeholder="засіб зв'язку"
                   onChange={(e) => onUpdateForm({ telemedChannel: e.target.value })}
                   className="flex-1 border-b border-dashed border-gray-300 outline-none bg-transparent px-1 text-[10pt]"
                 />
