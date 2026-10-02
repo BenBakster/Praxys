@@ -7,9 +7,7 @@ import {
   ShieldCheck,
   ChevronDown,
   Check,
-  FileText,
   RefreshCw,
-  SlidersHorizontal,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -40,20 +38,20 @@ export const Header: React.FC<HeaderProps> = ({
       id: 'gemini-3.8-flash',
       name: 'Google Gemini 3.8 Flash',
       badge: 'Рекомендовано',
-      desc: 'Прямий інтелект Google, блискавична швидкість та точне слідування МОЗ',
+      desc: 'Прямий інтелект Google, каскад високої доступності',
     },
     {
-      id: 'gemini-2.5-pro',
-      name: 'Google Gemini 2.5 Pro',
-      badge: 'Клінічний аналіз',
-      desc: 'Поглиблена диференційна діагностика для складних випадків',
+      id: 'gemini-3.1-flash-lite',
+      name: 'Google Gemini 3.1 Flash-Lite',
+      badge: 'Швидка',
+      desc: 'Миттєва клінічна екстракція фактів',
     },
   ];
 
   return (
     <header className="no-print sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-gray-200/80 transition-all">
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-        {/* Brand & Doctor ID */}
+        {/* Brand & Doctor ID (Removed "психотерапевт") */}
         <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
             <span className="font-semibold text-lg tracking-tight">VP</span>
@@ -68,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
               </h1>
             </div>
             <p className="text-[11px] text-gray-500 font-normal">
-              Лікар Віленчик А.П. • Ліцензія МОЗ України № 854 від 17.05.2024
+              Лікар-психіатр, нарколог Віленчик А.П. • Ліцензія МОЗ України № 854 від 17.05.2024
             </p>
           </div>
         </div>
@@ -92,7 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
             {modelDropdownOpen && (
               <div className="absolute left-0 mt-1.5 w-76 bg-white rounded-xl shadow-xl border border-gray-200/90 py-1.5 z-50 text-left">
                 <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-gray-400 uppercase">
-                  Пряме підключення до моделі
+                  Підключення до моделі
                 </div>
                 {models.map((model) => (
                   <button
@@ -129,7 +127,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 text-[11px] border border-emerald-200/60">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Фільтр галюцинацій активний</span>
+            <span>Каскад верифікації активний</span>
           </div>
         </div>
 
@@ -149,7 +147,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onPrint}
             disabled={!hasDocument || isProcessing}
-            title="Швидкий друк або збереження PDF у високій якості для CamScanner"
+            title="Швидкий друк або збереження чистого PDF для CamScanner"
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:pointer-events-none text-white text-xs font-medium shadow-sm transition-all active:scale-[0.98]"
           >
             <Printer className="w-4 h-4" />
@@ -160,7 +158,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onExportDocx}
             disabled={!hasDocument || isProcessing}
-            title="Завантажити офіційний документ у форматі Microsoft Word (.docx)"
+            title="Завантажити документ у форматі Word (.docx)"
             className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none text-gray-700 text-xs font-medium transition-colors"
           >
             <FileDown className="w-4 h-4 text-blue-600" />
@@ -171,7 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onSendTelegram}
             disabled={!hasDocument || isProcessing}
-            title="Надіслати готовий висновок у свій приватний Telegram"
+            title="Надіслати у приватний Telegram"
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none text-gray-700 text-xs font-medium transition-colors"
           >
             <Send className="w-3.5 h-3.5 text-sky-500" />

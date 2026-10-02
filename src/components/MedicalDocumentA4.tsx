@@ -1,6 +1,6 @@
 import React from 'react';
 import { Form028Data, PatientInfo } from '../types/clinical';
-import { Edit3, Check, Printer, FileText } from 'lucide-react';
+import { Edit3 } from 'lucide-react';
 
 interface DocumentProps {
   form028: Form028Data;
@@ -22,7 +22,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
         <div className="flex items-center gap-2">
           <Edit3 className="w-3.5 h-3.5 text-blue-600" />
           <span>
-            <strong>Інтерактивний лист А4:</strong> ви можете клікнути в будь-який абзац або поле нижче, щоб відредагувати текст безпосередньо на бланку.
+            <strong>Інтерактивний лист А4:</strong> ви можете клікнути в будь-який абзац або поле нижче, щоб відредагувати текст перед печаткою або CamScanner.
           </span>
         </div>
         <span className="text-[11px] font-medium text-blue-700 bg-white px-2 py-0.5 rounded shadow-2xs">
@@ -39,13 +39,13 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
           <div>Наказ МОЗ України 14.02.2012 № 110</div>
         </div>
 
-        {/* Doctor & Practice Header */}
+        {/* Doctor & Practice Header (No "психотерапевт") */}
         <div className="text-center border-b-2 border-gray-900 pb-3 mb-6 font-serif avoid-break">
           <div className="font-bold text-[14pt] tracking-wide uppercase">
             ФОП ВІЛЕНЧИК АНТОН ПАВЛОВИЧ
           </div>
           <div className="text-[10pt] text-gray-800 mt-1">
-            Медична практика: психіатрія, наркологія, психотерапія
+            Медична практика: психіатрія, наркологія
           </div>
           <div className="text-[9pt] text-gray-600 mt-0.5">
             Ліцензія МОЗ України: Наказ МОЗ № 854 від 17.05.2024 р. | ЄДРПОУ/РНОКПП: 3331405953
@@ -174,7 +174,7 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             />
           </div>
 
-          {/* 9. Diagnosis (Prominent) */}
+          {/* 9. Diagnosis */}
           <div className="p-3 bg-gray-50/70 border-l-4 border-gray-900 rounded-r avoid-break">
             <div className="flex flex-wrap items-baseline gap-2 mb-1">
               <span className="font-bold text-[12pt]">9. Діагноз (МКХ-10):</span>
@@ -227,22 +227,10 @@ export const MedicalDocumentA4: React.FC<DocumentProps> = ({
             </div>
           </div>
 
-          {/* Signature & Seal Block */}
-          <div className="mt-12 pt-6 border-t border-gray-300 flex items-center justify-between font-serif avoid-break">
-            {/* Stamp Place */}
-            <div className="w-28 h-28 border-2 border-dashed border-gray-400 rounded-full flex flex-col items-center justify-center text-center p-2 text-gray-500 opacity-80">
-              <span className="text-[10pt] font-bold">М. П.</span>
-              <span className="text-[7pt] leading-tight">Лікар Віленчик А.П.</span>
-              <span className="text-[6pt] leading-none mt-0.5">Ліцензія № 854</span>
-            </div>
-
-            {/* Doctor Signature */}
-            <div className="text-right">
-              <div className="text-[10pt] text-gray-700">Лікар-психіатр, психотерапевт:</div>
-              <div className="font-serif italic text-lg my-1 text-gray-800">
-                _____________________ / Віленчик А. П. /
-              </div>
-              <div className="text-[8pt] text-gray-500">(підпис, особиста печатка лікаря)</div>
+          {/* Bottom Stamp Block: ONLY circle for "М. П." without signature */}
+          <div className="mt-12 pt-6 border-t border-gray-200 flex justify-end font-serif avoid-break">
+            <div className="w-24 h-24 border-2 border-dashed border-gray-400 rounded-full flex flex-col items-center justify-center text-center p-2 text-gray-500 opacity-90 mr-4">
+              <span className="text-[12pt] font-bold tracking-wider">М. П.</span>
             </div>
           </div>
         </div>

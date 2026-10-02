@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Header } from './components/Header';
 import { UploadCard } from './components/UploadModalOrCard';
 import { FactsColumn } from './components/FactsColumn';
@@ -12,10 +12,9 @@ import {
   Copy,
   Check,
   Sparkles,
-  Layers,
   FileText,
   AlertCircle,
-  HelpCircle,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 export default function App() {
@@ -23,6 +22,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [consultationData, setConsultationData] = useState<ConsultationResult | null>(null);
   const [rawTranscript, setRawTranscript] = useState<string>('');
+  const [currentFileName, setCurrentFileName] = useState<string>('');
   const [telegramModalOpen, setTelegramModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -32,17 +32,21 @@ export default function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage(null);
-    }, 3500);
+    }, 4500);
   };
 
-  // Process consultation transcript via server API
+  // Process consultation transcript or JSON via server API
   const handleProcessTranscript = async (
     transcript: string,
     metadata?: any,
-    formType: string = '028_o'
+    formType: string = '028_o',
+    rawJson?: any
   ) => {
     setIsProcessing(true);
     setRawTranscript(transcript);
+    if (metadata?.fileName) {
+      setCurrentFileName(metadata.fileName);
+    }
 
     try {
       const response = await fetch('/api/extract', {
@@ -50,6 +54,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transcript,
+          rawJson,
           metadata,
           modelName: selectedModel,
           formType,
@@ -57,35 +62,33 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`Помилка сервера: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Помилка сервера: ${response.statusText}`);
       }
 
       const result = await response.json();
       if (result.ok && result.data) {
         setConsultationData(result.data);
-        showToast(
-          result.source === 'gemini'
-            ? `Консультацію успішно оброблено за допомогою ${selectedModel}!`
-            : 'Консультацію структуровано за клінічним стандартом МОЗ!'
-        );
+        const patientName = result.data.patient?.fullName || 'Пацієнт';
+        const modelTag = result.model ? ` (${result.model})` : '';
+        showToast(`Успішно сформовано для: ${patientName}${modelTag}!`);
       } else {
         throw new Error(result.error || 'Не вдалося структурувати дані');
       }
     } catch (err: any) {
-      console.warn('API extraction issue, falling back to local clinical structure:', err);
-      // Fallback to demo structure if offline or server hiccup
-      setConsultationData(DEMO_CONSULTATION_RESULT);
-      showToast('Завантажено клінічну форму за стандартом Наказу МОЗ № 110');
+      console.error('API extraction issue:', err);
+      showToast(`Помилка аналізу файлу: ${err.message || 'Перевірте формат'}`);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // 1-Click Load Demo
+  // 1-Click Load Demo Sample
   const handleLoadDemo = () => {
     setRawTranscript(DEMO_RAW_TRANSCRIPT);
+    setCurrentFileName('demo_consultation_f41.json');
     setConsultationData(DEMO_CONSULTATION_RESULT);
-    showToast('Демонстраційний прийом завантажено: Мельник І.О. (F41.2)');
+    showToast('Зразок прийому завантажено: Мельник І.О.');
   };
 
   // Native Print / CamScanner PDF
@@ -94,7 +97,7 @@ export default function App() {
     window.print();
   };
 
-  // Export DOCX
+  // Export DOCX (No "психотерапевт", only M.P. seal circle)
   const handleExportDocx = async () => {
     if (!consultationData) return;
 
@@ -120,7 +123,7 @@ export default function App() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      showToast('Файл .docx успішно сформовано та завантажено!');
+      showToast('Файл .docx сформовано та завантажено!');
     } catch (err: any) {
       console.error(err);
       showToast('Не вдалося експортувати DOCX');
@@ -142,18 +145,19 @@ export default function App() {
         }),
       });
       setTelegramModalOpen(true);
-    } catch (e) {
+    } catch {
       setTelegramModalOpen(true);
     }
   };
 
-  // Copy full document text
+  // Copy full document text (No "психотерапевт")
   const handleCopyText = () => {
     if (!consultationData) return;
     const doc = consultationData.form028;
     const p = consultationData.patient;
 
     const fullText = `ФОП ВІЛЕНЧИК АНТОН ПАВЛОВИЧ
+Лікар-психіатр, нарколог
 Ліцензія МОЗ України № 854 від 17.05.2024 р.
 КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА № ${doc.documentNumber} від ${p.consultationDate}
 1. Пацієнт: ${p.fullName}, ${p.age} (${p.consultationType})
@@ -167,7 +171,7 @@ export default function App() {
 ${doc.recommendationsSection}
 9. Працездатність: ${doc.disabilityNote}
 10. Термін повторної явки: ${doc.nextAppointmentDate}
-Лікар-психіатр, психотерапевт: Віленчик А.П.`;
+М. П.`;
 
     navigator.clipboard.writeText(fullText);
     setCopied(true);
@@ -202,7 +206,10 @@ ${doc.recommendationsSection}
         onPrint={handlePrint}
         onExportDocx={handleExportDocx}
         onSendTelegram={handleSendTelegram}
-        onReset={() => setConsultationData(null)}
+        onReset={() => {
+          setConsultationData(null);
+          setCurrentFileName('');
+        }}
         hasDocument={Boolean(consultationData)}
         isProcessing={isProcessing}
       />
@@ -217,17 +224,15 @@ ${doc.recommendationsSection}
               <Sparkles className="w-5 h-5 text-blue-600 absolute inset-0 m-auto animate-pulse" />
             </div>
             <h3 className="mt-4 text-sm font-semibold text-gray-900">
-              {selectedModel === 'gemini-3.8-flash'
-                ? 'Прямий аналіз через Google Gemini 3.8 Flash...'
-                : 'Клінічний аналіз та верифікація за стандартом МОЗ...'}
+              Аналіз реального файлу через каскад Gemini...
             </h3>
             <p className="mt-1 text-xs text-gray-500 max-w-sm">
-              Відбираємо тверді факти з прямої мови пацієнта, перевіряємо дозування ліків та заповнюємо Форму № 028/о
+              Виділяємо справжнє ім'я пацієнта, озвучені скарги, перевіряємо дози та формуємо бланк
             </p>
           </div>
         )}
 
-        {/* If no document loaded yet, show the crystal-clean Upload Card */}
+        {/* Upload Card */}
         {!consultationData && !isProcessing && (
           <UploadCard
             onProcessTranscript={handleProcessTranscript}
@@ -236,7 +241,7 @@ ${doc.recommendationsSection}
           />
         )}
 
-        {/* Two-Column Clinical Workspace when Document is Ready */}
+        {/* Two-Column Clinical Workspace */}
         {consultationData && !isProcessing && (
           <div>
             {/* Secondary Action Toolbar */}
@@ -249,6 +254,11 @@ ${doc.recommendationsSection}
                 <span className="text-xs text-gray-600">
                   МКХ-10: <strong>{consultationData.form028.diagnosisCode}</strong> ({consultationData.form028.diagnosisDescription})
                 </span>
+                {currentFileName && (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500">
+                    {currentFileName}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -280,7 +290,7 @@ ${doc.recommendationsSection}
 
             {/* Split Grid: Left = Verified Facts, Right = A4 Form 028/о */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left Column: Facts (5 cols on large screens) */}
+              {/* Left Column: Facts */}
               <div className="lg:col-span-5 xl:col-span-4 no-print">
                 <div className="sticky top-20">
                   <div className="flex items-center justify-between mb-3 px-1">
@@ -299,7 +309,7 @@ ${doc.recommendationsSection}
                 </div>
               </div>
 
-              {/* Right Column: A4 Document Sheet (7 cols on large screens) */}
+              {/* Right Column: A4 Document Sheet */}
               <div className="lg:col-span-7 xl:col-span-8 flex justify-center">
                 <MedicalDocumentA4
                   form028={consultationData.form028}

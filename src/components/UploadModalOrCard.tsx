@@ -2,18 +2,17 @@ import React, { useState, useRef } from 'react';
 import {
   UploadCloud,
   FileCode,
-  FileText,
   Play,
   ClipboardPaste,
-  Shield,
   CheckCircle2,
   Sparkles,
   ArrowRight,
+  FileText,
+  AlertCircle,
 } from 'lucide-react';
-import { DEMO_RAW_TRANSCRIPT, DEMO_FIREFLIES_JSON } from '../data/demoData';
 
 interface UploadProps {
-  onProcessTranscript: (transcript: string, metadata?: any, formType?: string) => void;
+  onProcessTranscript: (transcript: string, metadata?: any, formType?: string, rawJson?: any) => void;
   onLoadDemo: () => void;
   isProcessing: boolean;
 }
@@ -27,6 +26,12 @@ export const UploadCard: React.FC<UploadProps> = ({
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
   const [pasteText, setPasteText] = useState('');
   const [formType, setFormType] = useState('028_o');
+  const [lastUploadedInfo, setLastUploadedInfo] = useState<{
+    fileName: string;
+    utterancesCount: number;
+    title?: string;
+  } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -54,38 +59,111 @@ export const UploadCard: React.FC<UploadProps> = ({
     }
   };
 
+  // Robust Universal JSON & Text Parser
   const handleFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (!content) return;
+      const rawContent = event.target?.result as string;
+      if (!rawContent) return;
 
       try {
-        // Attempt to parse as JSON (Fireflies, Zoom, Whisper)
-        const parsed = JSON.parse(content);
-        let extractedText = '';
+        const parsedJson = JSON.parse(rawContent);
+        const extracted = parseAnyJson(parsedJson);
 
-        if (Array.isArray(parsed.sentences)) {
-          extractedText = parsed.sentences
-            .map((s: any) => `${s.speaker_name || 'Спікер'}: ${s.text || ''}`)
-            .join('\n');
-        } else if (Array.isArray(parsed.transcript)) {
-          extractedText = parsed.transcript
-            .map((s: any) => `${s.speaker || s.speaker_name || 'Спікер'}: ${s.text || ''}`)
-            .join('\n');
-        } else if (parsed.text) {
-          extractedText = parsed.text;
-        } else {
-          extractedText = JSON.stringify(parsed, null, 2);
-        }
+        setLastUploadedInfo({
+          fileName: file.name,
+          utterancesCount: extracted.dialogueLines.length || 1,
+          title: extracted.title || file.name,
+        });
 
-        onProcessTranscript(extractedText, { fileName: file.name, ...parsed }, formType);
+        const meta = {
+          fileName: file.name,
+          title: extracted.title,
+          date: extracted.date,
+          participants: extracted.participants,
+          fileSize: file.size,
+        };
+
+        const transcriptText = extracted.dialogueLines.length > 0
+          ? extracted.dialogueLines.join('\n')
+          : rawContent;
+
+        onProcessTranscript(transcriptText, meta, formType, parsedJson);
       } catch {
-        // Fallback to raw text file
-        onProcessTranscript(content, { fileName: file.name }, formType);
+        // Plain text file (not JSON)
+        const lines = rawContent.split('\n').filter(Boolean);
+        setLastUploadedInfo({
+          fileName: file.name,
+          utterancesCount: lines.length,
+        });
+
+        onProcessTranscript(
+          rawContent,
+          { fileName: file.name, date: new Date().toLocaleDateString('uk-UA') },
+          formType
+        );
       }
     };
     reader.readAsText(file);
+  };
+
+  // Extract dialogue from any known JSON format
+  const parseAnyJson = (obj: any): { dialogueLines: string[]; title?: string; date?: string; participants?: string[] } => {
+    const dialogueLines: string[] = [];
+    let title = obj.title || obj.meeting_title || obj.data?.transcript?.title;
+    let date = obj.date || obj.date_string || obj.data?.transcript?.date;
+    let participants = obj.participants || obj.attendees || obj.speakers;
+
+    // 1. Fireflies sentences
+    if (Array.isArray(obj.sentences)) {
+      for (const s of obj.sentences) {
+        const speaker = s.speaker_name || s.speaker || 'Спікер';
+        const txt = s.text || s.raw_text || '';
+        if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
+      }
+    }
+    // 2. Nested data.transcript.sentences
+    else if (obj.data && obj.data.transcript && Array.isArray(obj.data.transcript.sentences)) {
+      for (const s of obj.data.transcript.sentences) {
+        const speaker = s.speaker_name || s.speaker || 'Спікер';
+        const txt = s.text || s.raw_text || '';
+        if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
+      }
+    }
+    // 3. Transcript array
+    else if (Array.isArray(obj.transcript)) {
+      for (const s of obj.transcript) {
+        if (typeof s === 'string') {
+          dialogueLines.push(s);
+        } else {
+          const speaker = s.speaker || s.speaker_name || 'Спікер';
+          const txt = s.text || s.raw_text || '';
+          if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
+        }
+      }
+    }
+    // 4. Raw Array of turns
+    else if (Array.isArray(obj)) {
+      for (const s of obj) {
+        if (typeof s === 'string') {
+          dialogueLines.push(s);
+        } else {
+          const speaker = s.speaker || s.speaker_name || s.role || 'Спікер';
+          const txt = s.text || s.raw_text || s.content || '';
+          if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
+        }
+      }
+    }
+    // 5. Utterances format
+    else if (Array.isArray(obj.utterances)) {
+      for (const s of obj.utterances) {
+        const speaker = s.speaker || s.speaker_name || 'Спікер';
+        const txt = s.text || s.content || '';
+        if (txt.trim()) dialogueLines.push(`${speaker}: ${txt.trim()}`);
+      }
+    }
+
+    return { dialogueLines, title, date, participants };
   };
 
   const handlePasteSubmit = () => {
@@ -99,14 +177,14 @@ export const UploadCard: React.FC<UploadProps> = ({
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200/80 text-blue-700 text-xs font-medium mb-3">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Пряма інтеграція з Gemini 3.8 & Форма № 028/о МОЗ України</span>
+          <span>Пряме структурування прийому • Форма № 028/о МОЗ України</span>
         </div>
         <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
           Студія клінічних висновків лікаря Віленчика А.П.
         </h2>
         <p className="mt-2 text-sm text-gray-600 max-w-xl mx-auto leading-relaxed">
-          Перетягніть JSON-файл зустрічі з Fireflies або вставте текст бесіди.
-          Система виділить тверді факти без додумування доз та сформує офіційний бланк для якісного друку чи CamScanner.
+          Перетягніть ваш реальний JSON-файл із Fireflies, Zoom або Whisper.
+          Система розпізнає справжнього пацієнта, виділить скарги та сформує висновок для друку або CamScanner.
         </p>
       </div>
 
@@ -139,12 +217,11 @@ export const UploadCard: React.FC<UploadProps> = ({
             >
               <span className="flex items-center justify-center gap-1.5">
                 <ClipboardPaste className="w-3.5 h-3.5 text-indigo-600" />
-                Вставити текст вручну
+                Вставити текст бесіди
               </span>
             </button>
           </div>
 
-          {/* Form standard selector */}
           <div className="flex items-center gap-2 text-xs">
             <span className="text-gray-500 font-medium">Стандарт:</span>
             <select
@@ -154,7 +231,6 @@ export const UploadCard: React.FC<UploadProps> = ({
             >
               <option value="028_o">Форма № 028/о (Консультативний висновок)</option>
               <option value="002_tm">Форма № 002/тм (Телемедицина)</option>
-              <option value="027_o">Форма № 027/о (Виписка з амбулаторної карти)</option>
             </select>
           </div>
         </div>
@@ -187,24 +263,33 @@ export const UploadCard: React.FC<UploadProps> = ({
               </div>
 
               <h4 className="text-sm font-semibold text-gray-900 mb-1">
-                Перетягніть сюди JSON або TXT файл консультації
+                Перетягніть сюди файл JSON консультації
               </h4>
               <p className="text-xs text-gray-500 max-w-sm mx-auto mb-4">
-                Підтримуються файли експорту транскрипту Fireflies.ai, Zoom, Google Meet або диктофонні розшифровки
+                Підтримується повний експорт Fireflies.ai, Zoom, Whisper або структуровані транскрипти зустрічей
               </p>
 
               <div className="inline-flex items-center gap-2">
                 <span className="px-4 py-2 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-800 shadow-2xs hover:bg-gray-50 transition-colors">
-                  Обрати файл на комп'ютері
+                  Обрати JSON файл на комп'ютері
                 </span>
               </div>
+
+              {lastUploadedInfo && (
+                <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs border border-emerald-200">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>
+                    Завантажено: <strong>{lastUploadedInfo.fileName}</strong> ({lastUploadedInfo.utterancesCount} реплік)
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
               <textarea
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
-                placeholder="Вставте сюди текст розмови між лікарем та пацієнтом..."
+                placeholder="Вставте сюди стенограму або текст бесіди лікаря з пацієнтом..."
                 rows={8}
                 className="w-full p-4 rounded-xl border border-gray-200 text-xs text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono"
               />
@@ -229,10 +314,10 @@ export const UploadCard: React.FC<UploadProps> = ({
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-900">
-                  Бажаєте протестувати прямо зараз без завантаження файлу?
+                  Тестовий прийом (демо)
                 </p>
                 <p className="text-[11px] text-gray-500">
-                  Завантажує реальний клінічний кейс: тривожно-депресивний розлад (F41.2), нічні панічні атаки, рецептура
+                  Зразок заповнення форми на основі реалістичного кейсу тривожного розладу
                 </p>
               </div>
             </div>
@@ -242,24 +327,24 @@ export const UploadCard: React.FC<UploadProps> = ({
               disabled={isProcessing}
               className="w-full sm:w-auto px-4 py-2 rounded-lg bg-white border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold shadow-2xs transition-all shrink-0 active:scale-95"
             >
-              Завантажити демо-прийом
+              Завантажити зразок
             </button>
           </div>
         </div>
 
-        {/* Feature Guarantees (Google & Apple cleanliness) */}
+        {/* Feature Guarantees */}
         <div className="bg-gray-50/70 px-6 py-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-gray-600">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span>Двокрокова схема відсікання галюцинацій</span>
+            <span>Аналіз реальних даних без сторонніх шаблонів</span>
           </div>
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <span>Ідеальний векторний PDF для CamScanner</span>
+            <span>Чистий аркуш для CamScanner (тільки М. П.)</span>
           </div>
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-            <span>Прямий інтелект Google Gemini 3.8</span>
+            <span>Пряма обробка Gemini 3.8 / 3.1</span>
           </div>
         </div>
       </div>
