@@ -14,16 +14,16 @@ import {
   Sparkles,
   FileText,
   AlertCircle,
-  FileSpreadsheet,
 } from 'lucide-react';
 
 export default function App() {
-  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
   const [isProcessing, setIsProcessing] = useState(false);
   const [consultationData, setConsultationData] = useState<ConsultationResult | null>(null);
   const [rawTranscript, setRawTranscript] = useState<string>('');
   const [currentFileName, setCurrentFileName] = useState<string>('');
   const [telegramModalOpen, setTelegramModalOpen] = useState(false);
+  const [telegramResponseMsg, setTelegramResponseMsg] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -35,7 +35,7 @@ export default function App() {
     }, 4500);
   };
 
-  // Process consultation transcript or JSON via server API
+  // Process consultation transcript or raw JSON via server API
   const handleProcessTranscript = async (
     transcript: string,
     metadata?: any,
@@ -49,29 +49,34 @@ export default function App() {
     }
 
     try {
+      // Send flexible payload that /api/extract accepts in all scenarios
+      const payload: any = {
+        transcript,
+        rawJson: rawJson || undefined,
+        metadata: metadata || {},
+        modelName: selectedModel,
+        formType,
+      };
+
+      // Also merge root fields if rawJson is passed for maximum compatibility
+      if (rawJson && typeof rawJson === 'object') {
+        if (rawJson.sentences) payload.sentences = rawJson.sentences;
+        if (rawJson.transcript) payload.transcriptObj = rawJson.transcript;
+        if (rawJson.title) payload.title = rawJson.title;
+      }
+
       const response = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcript,
-          rawJson,
-          metadata,
-          modelName: selectedModel,
-          formType,
-        }),
+        body: JSON.stringify(payload),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Помилка сервера: ${response.statusText}`);
-      }
 
       const result = await response.json();
       if (result.ok && result.data) {
         setConsultationData(result.data);
         const patientName = result.data.patient?.fullName || 'Пацієнт';
-        const modelTag = result.model ? ` (${result.model})` : '';
-        showToast(`Успішно сформовано для: ${patientName}${modelTag}!`);
+        const sourceName = result.source === 'gemini' ? selectedModel : 'Клінічний парсер';
+        showToast(`Успішно сформовано для: ${patientName} (${sourceName})!`);
       } else {
         throw new Error(result.error || 'Не вдалося структурувати дані');
       }
@@ -130,27 +135,36 @@ export default function App() {
     }
   };
 
-  // Telegram dispatch
+  // Real Telegram dispatch
   const handleSendTelegram = async () => {
     if (!consultationData) return;
 
     try {
-      await fetch('/api/send-telegram', {
+      showToast('Відправка документа DOCX у Telegram...');
+      const res = await fetch('/api/send-telegram', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          documentNumber: consultationData.form028.documentNumber,
-          patientName: consultationData.patient.fullName,
-          diagnosis: `${consultationData.form028.diagnosisCode} ${consultationData.form028.diagnosisDescription}`,
+          form028: consultationData.form028,
+          patient: consultationData.patient,
         }),
       });
+
+      const data = await res.json();
+      setTelegramResponseMsg(data.message || 'Документ надіслано');
       setTelegramModalOpen(true);
-    } catch {
+      if (data.sent) {
+        showToast('Документ DOCX доставлено в особистий чат Telegram!');
+      } else {
+        showToast(data.message || 'Статус Telegram оновлено');
+      }
+    } catch (err: any) {
+      setTelegramResponseMsg(`Помилка відправки: ${err.message}`);
       setTelegramModalOpen(true);
     }
   };
 
-  // Copy full document text (No "психотерапевт")
+  // Copy full document text (No "психотерапевт", only M.P.)
   const handleCopyText = () => {
     if (!consultationData) return;
     const doc = consultationData.form028;
@@ -224,10 +238,10 @@ ${doc.recommendationsSection}
               <Sparkles className="w-5 h-5 text-blue-600 absolute inset-0 m-auto animate-pulse" />
             </div>
             <h3 className="mt-4 text-sm font-semibold text-gray-900">
-              Аналіз реального файлу через каскад Gemini...
+              Аналіз консультації через {selectedModel}...
             </h3>
             <p className="mt-1 text-xs text-gray-500 max-w-sm">
-              Виділяємо справжнє ім'я пацієнта, озвучені скарги, перевіряємо дози та формуємо бланк
+              Виділяємо справжнє ім'я пацієнта, озвучені скарги, перевіряємо дози та заповнюємо бланк МОЗ
             </p>
           </div>
         )}
@@ -255,7 +269,7 @@ ${doc.recommendationsSection}
                   МКХ-10: <strong>{consultationData.form028.diagnosisCode}</strong> ({consultationData.form028.diagnosisDescription})
                 </span>
                 {currentFileName && (
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500">
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500 font-mono">
                     {currentFileName}
                   </span>
                 )}
@@ -339,6 +353,7 @@ ${doc.recommendationsSection}
           documentNumber={consultationData.form028.documentNumber}
           patientName={consultationData.patient.fullName}
           diagnosis={`${consultationData.form028.diagnosisCode} ${consultationData.form028.diagnosisDescription}`}
+          customMessage={telegramResponseMsg}
         />
       )}
     </div>

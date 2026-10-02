@@ -7,6 +7,7 @@ interface TelegramModalProps {
   documentNumber: string;
   patientName: string;
   diagnosis: string;
+  customMessage?: string | null;
 }
 
 export const TelegramModal: React.FC<TelegramModalProps> = ({
@@ -15,6 +16,7 @@ export const TelegramModal: React.FC<TelegramModalProps> = ({
   documentNumber,
   patientName,
   diagnosis,
+  customMessage,
 }) => {
   if (!isOpen) return null;
 
@@ -36,12 +38,13 @@ export const TelegramModal: React.FC<TelegramModalProps> = ({
         <div className="flex items-center gap-2 text-emerald-600 mb-1">
           <CheckCircle2 className="w-5 h-5" />
           <h3 className="font-semibold text-gray-900 text-base">
-            Надіслано до вашого Telegram
+            Telegram-відправка
           </h3>
         </div>
 
         <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-          Медичний висновок успішно передано до вашого особистого приватного чату бота <strong>@vilenchyk_bot</strong> (не надсилається пацієнту!).
+          {customMessage ||
+            'Медичний висновок сформовано у форматі DOCX та направлено до особистого приватного чату лікаря (не надсилається пацієнту!).'}
         </p>
 
         <div className="mt-4 p-3.5 rounded-xl bg-gray-50 border border-gray-100 text-xs space-y-1.5 font-mono">

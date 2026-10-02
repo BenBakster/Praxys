@@ -35,23 +35,23 @@ export const Header: React.FC<HeaderProps> = ({
 
   const models = [
     {
-      id: 'gemini-3.8-flash',
-      name: 'Google Gemini 3.8 Flash',
-      badge: 'Рекомендовано',
-      desc: 'Прямий інтелект Google, каскад високої доступності',
+      id: 'gemini-2.5-flash',
+      name: 'Google Gemini 2.5 Flash',
+      badge: 'Основна',
+      desc: 'Основна клінічна модель Google, швидка та точна',
     },
     {
-      id: 'gemini-3.1-flash-lite',
-      name: 'Google Gemini 3.1 Flash-Lite',
+      id: 'gemini-2.0-flash',
+      name: 'Google Gemini 2.0 Flash',
       badge: 'Швидка',
-      desc: 'Миттєва клінічна екстракція фактів',
+      desc: 'Додаткова швидка модель для миттєвого структурування',
     },
   ];
 
   return (
     <header className="no-print sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-gray-200/80 transition-all">
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-        {/* Brand & Doctor ID (Removed "психотерапевт") */}
+        {/* Brand & Doctor ID (No "психотерапевт") */}
         <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
             <span className="font-semibold text-lg tracking-tight">VP</span>
@@ -83,14 +83,14 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>{models.find((m) => m.id === selectedModel)?.name || 'Gemini 3.8 Flash'}</span>
+              <span>{models.find((m) => m.id === selectedModel)?.name || 'Gemini 2.5 Flash'}</span>
               <ChevronDown className="w-3 h-3 text-gray-400" />
             </button>
 
             {modelDropdownOpen && (
               <div className="absolute left-0 mt-1.5 w-76 bg-white rounded-xl shadow-xl border border-gray-200/90 py-1.5 z-50 text-left">
                 <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-gray-400 uppercase">
-                  Підключення до моделі
+                  Моделі Google
                 </div>
                 {models.map((model) => (
                   <button
@@ -127,7 +127,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 text-[11px] border border-emerald-200/60">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Каскад верифікації активний</span>
+            <span>Безпечна верифікація активна</span>
           </div>
         </div>
 
@@ -169,7 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onSendTelegram}
             disabled={!hasDocument || isProcessing}
-            title="Надіслати у приватний Telegram"
+            title="Надіслати готовий DOCX у свій приватний Telegram"
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none text-gray-700 text-xs font-medium transition-colors"
           >
             <Send className="w-3.5 h-3.5 text-sky-500" />
