@@ -4,16 +4,10 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  HeadingLevel,
-  AlignmentType,
-} from 'docx';
-import mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
+import { Packer } from 'docx';
+import { PRACTICE_INFO, buildDocxDocument } from './server/docxDocument.ts';
+import { extractTextFromHistoryFile, parseClinicalHistoryData } from './server/historyParser.ts';
+import { installPasswordGate } from './server/passwordGate.ts';
 
 dotenv.config();
 
@@ -22,17 +16,23 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Doctor & Practice Profile Defaults (Strict MOH compliance, NO "психотерапевт")
-const PRACTICE_INFO = {
-  doctorName: 'Віленчик Антон Павлович',
-  doctorTitle: 'Лікар-психіатр, нарколог',
-  practiceName: 'ФОП ВІЛЕНЧИК А. П.',
-  licenseNumber: 'Наказ МОЗ України № 854 від 17.05.2024 р.',
-  edrpou: '3331405953',
-  address: 'м. Київ, вул. Велика Васильківська / Дистанційний прийом',
-  phone: '+380 (50) 412-25-33',
-  email: 'Anton.Vilenchyk@gmail.com',
-};
+const isProduction = process.env.NODE_ENV === 'production';
+const appPassword = (process.env.APP_PASSWORD || '').trim();
+
+if (isProduction && appPassword.length < 8) {
+  console.error('APP_PASSWORD не задано або коротше 8 символів: без пароля сервер не запускається.');
+  process.exit(1);
+}
+
+if (appPassword) {
+  // Railway terminates TLS in front of the app; req.ip must come from X-Forwarded-For.
+  app.set('trust proxy', 1);
+  installPasswordGate(app, appPassword, isProduction);
+}
+
+app.get('/api/session', (req: Request, res: Response) => {
+  res.json({ ok: true });
+});
 
 // Initialize Gemini Client
 const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -333,183 +333,6 @@ app.post('/api/test-ai', async (req: Request, res: Response) => {
   }
 });
 
-// Helper: Extract raw text from various history file formats (PDF, DOCX, MD, TXT, JSON)
-async function extractTextFromHistoryFile(
-  fileName: string,
-  fileBase64?: string,
-  textContent?: string
-): Promise<string> {
-  if (textContent && textContent.trim()) {
-    return textContent.trim();
-  }
-
-  if (!fileBase64) {
-    throw new Error('Файл не містить даних');
-  }
-
-  const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
-  const buffer = Buffer.from(cleanBase64, 'base64');
-  const lowerName = (fileName || '').toLowerCase();
-
-  if (lowerName.endsWith('.docx')) {
-    const docxResult = await mammoth.extractRawText({ buffer });
-    return docxResult.value || '';
-  }
-
-  if (lowerName.endsWith('.pdf')) {
-    const parser = new PDFParse({ data: buffer });
-    const textResult = await parser.getText();
-    return textResult.text || '';
-  }
-
-  if (lowerName.endsWith('.json')) {
-    const jsonStr = buffer.toString('utf-8');
-    try {
-      const parsed = JSON.parse(jsonStr);
-      if (parsed.form028 || parsed.patient) {
-        const parts: string[] = [];
-        if (parsed.patient?.fullName) parts.push(`Пацієнт: ${parsed.patient.fullName}`);
-        if (parsed.patient?.age) parts.push(`Вік / Дата народження: ${parsed.patient.age}`);
-        if (parsed.patient?.consultationDate) parts.push(`Дата огляду: ${parsed.patient.consultationDate}`);
-        if (parsed.form028?.diagnosisCode || parsed.form028?.diagnosisDescription) {
-          parts.push(`Діагноз: ${parsed.form028.diagnosisCode || ''} ${parsed.form028.diagnosisDescription || ''}`);
-        }
-        if (parsed.form028?.anamnesisVitaeSection) {
-          parts.push(`Анамнез життя: ${parsed.form028.anamnesisVitaeSection}`);
-        }
-        if (parsed.form028?.anamnesisMorbiSection) {
-          parts.push(`Анамнез захворювання: ${parsed.form028.anamnesisMorbiSection}`);
-        }
-        if (parsed.form028?.recommendationsSection) {
-          parts.push(`Призначена терапія / рекомендації: ${parsed.form028.recommendationsSection}`);
-        }
-        if (parsed.form028?.objectiveStatusSection) {
-          parts.push(`Об'єктивний стан: ${parsed.form028.objectiveStatusSection}`);
-        }
-        return parts.join('\n\n');
-      }
-      return jsonStr;
-    } catch {
-      return jsonStr;
-    }
-  }
-
-  return buffer.toString('utf-8');
-}
-
-// Helper: Extract structured clinical history and psychiatry facts from text
-function parseClinicalHistoryData(rawText: string, fileName: string = '') {
-  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
-
-  // 1. Patient Name
-  let patientName = '';
-  const namePatterns = [
-    /(?:пацієнт(?:ка)?|піб|прізвище,?\s*ім'?я(?:\s*та\s*по\s*батькові)?|хворий|хвора)[:\s]+([А-ЯІЇЄҐ][а-яіїєґ']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ']+){1,2})/i,
-    /(?:1\.\s*Прізвище,?\s*ім'?я)[:\s]+([А-ЯІЇЄҐ][а-яіїєґ']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ']+){1,2})/i,
-    /([А-ЯІЇЄҐ][а-яіїєґ']+\s+[А-ЯІЇЄҐ][а-яіїєґ']+\s+[А-ЯІЇЄҐ][а-яіїєґ']+)/,
-  ];
-
-  for (const pat of namePatterns) {
-    for (const line of lines.slice(0, 30)) {
-      if (
-        line.toLowerCase().includes('віленчик') ||
-        line.toLowerCase().includes('vilenchyk') ||
-        line.toLowerCase().includes('лікар')
-      ) {
-        continue;
-      }
-      const m = line.match(pat);
-      if (m && m[1]) {
-        patientName = m[1].trim();
-        break;
-      }
-    }
-    if (patientName) break;
-  }
-
-  // 2. Date of Birth
-  let dob = '';
-  const dobPatterns = [
-    /(?:дата\s*народження|д\.?н\.?|народив(?:ся|лась)|р\.?н\.?)[:\s]*(\d{2}[./-]\d{2}[./-]\d{4})/i,
-    /(\d{2}[./-]\d{2}[./-]\d{4})\s*(?:р\.?н\.?|року\s+народження)/i,
-    /(\d{2}\.\d{2}\.\d{4})/,
-  ];
-
-  for (const pat of dobPatterns) {
-    for (const line of lines.slice(0, 35)) {
-      const m = line.match(pat);
-      if (m && m[1]) {
-        dob = m[1].replace(/[-/]/g, '.');
-        break;
-      }
-    }
-    if (dob) break;
-  }
-
-  // 3. Consultation Date
-  let consultationDate = '';
-  for (const line of lines) {
-    if (line.includes('14.02.2012') || line.includes('19.10.2015')) continue; // Skip MOH decree dates
-    const m = line.match(/(?:дата\s*(?:звернення|консультації|огляду)|висновок\s+від|від)[:\s]*(\d{2}[./-]\d{2}[./-]\d{4})/i);
-    if (m && m[1]) {
-      consultationDate = m[1].replace(/[-/]/g, '.');
-      break;
-    }
-  }
-
-  // 4. Past Diagnosis (ICD-10)
-  let pastDiagnosisCode = '';
-  let pastDiagnosisDescription = '';
-  const diagMatch = rawText.match(/(?:діагноз|шифр\s*мкх|мкх-10|код)[:\s]*([Ff]\d{2}(?:\.\d{1,2})?)[^.\n]*?(?:[:\s\-—]+([^\n.]+))?/i);
-  if (diagMatch) {
-    pastDiagnosisCode = diagMatch[1].toUpperCase();
-    if (diagMatch[2]) {
-      pastDiagnosisDescription = diagMatch[2].trim();
-    }
-  } else {
-    const icdOnly = rawText.match(/\b([Ff]\d{2}(?:\.\d{1,2})?)\b/);
-    if (icdOnly) {
-      pastDiagnosisCode = icdOnly[1].toUpperCase();
-    }
-  }
-
-  // 5. Past Anamnesis Vitae (Section 6)
-  let anamnesisVitae = '';
-  const vitaeMatch = rawText.match(/(?:6\.\s*Анамнез\s*життя|Анамнез\s*життя)[:\s]*([\s\S]*?)(?=(?:\n\s*(?:7\.|Об'єктивний|Статус|Діагноз)|\n\n\n|$))/i);
-  if (vitaeMatch && vitaeMatch[1]) {
-    anamnesisVitae = vitaeMatch[1].trim();
-  }
-
-  // 6. Past Therapy & Recommendations
-  let pastTherapy = '';
-  const recMatch = rawText.match(/(?:9\.\s*Рекомендації|Рекомендації|Призначення|Фармакотерапія|Лікування|Схема\s*лікування)[:\s]*([\s\S]*?)(?=(?:\n\s*(?:10\.|Лікар|М\.\s*П\.|Печатка|Дата|Підпис)|\n\n\n|$))/i);
-  if (recMatch && recMatch[1]) {
-    pastTherapy = recMatch[1].trim();
-  } else {
-    const medRegex = /(?:есциталопрам|сертралін|золофт|пароксетин|флуоксетин|ципралекс|паксил|венлафаксин|велаксин|дулоксетин|симбалта|міртазапін|міртел|тразодон|триттіко|прегабалін|лірика|гідазепам|клоназепам|ксанакс|алпразолам|кветіапін|сероквель|оланзапін|арипіпразол|ламотриджин|ламіктал|вальпроат|депакін|літій|бупропіон|атомоксетин|страттера)[^.;\n]*/gi;
-    const medsFound = rawText.match(medRegex);
-    if (medsFound && medsFound.length > 0) {
-      pastTherapy = Array.from(new Set(medsFound.map((m) => m.trim()))).join('; ');
-    }
-  }
-
-  const summaryParts: string[] = [];
-  if (consultationDate) summaryParts.push(`Огляд від ${consultationDate}`);
-  if (pastDiagnosisCode) summaryParts.push(`Діагноз: ${pastDiagnosisCode}${pastDiagnosisDescription ? ` (${pastDiagnosisDescription})` : ''}`);
-  if (pastTherapy) summaryParts.push(`Попередня терапія: ${pastTherapy.replace(/\n+/g, ' ').slice(0, 150)}`);
-
-  return {
-    patientName,
-    dob,
-    pastDiagnosisCode,
-    pastDiagnosisDescription,
-    pastTherapy: pastTherapy.slice(0, 1000),
-    anamnesisVitae: anamnesisVitae.slice(0, 1000),
-    consultationDate,
-    summary: summaryParts.join(' | ') || `Документ: ${fileName}`,
-  };
-}
-
 // Endpoint: Parse History File (PDF, DOCX, MD, TXT, JSON)
 app.post('/api/parse-history-file', async (req: Request, res: Response) => {
   try {
@@ -568,6 +391,7 @@ function errorText(err: unknown): string {
   return raw
     .replace(/AIza[0-9A-Za-z_-]{8,}/g, '[ключ]')
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[ключ]')
+    .replace(/\d{6,}:[A-Za-z0-9_-]{30,}/g, '[ключ]')
     .slice(0, 500);
 }
 
@@ -575,12 +399,13 @@ const CLINICAL_SYSTEM_INSTRUCTION = `
 Ви — провідний клінічний експерт та медичний асистент лікаря-психіатра для приватної психіатричної та наркологічної практики лікаря Віленчика Антона Павловича (ФОП Віленчик А.П., Ліцензія МОЗ України № 854 від 17.05.2024 р.).
 
 СУВОРІ РЕГЛАМЕНТНІ ПРАВИЛА:
+0. ЛИШЕ ФАКТИ: скарги, анамнез, препарати, дози, цифри та оцінки брати тільки зі стенограми, приміток лікаря, картки пацієнта, психометричних шкал і попереднього документа. Нічого не домислювати.
 1. СПЕЦІАЛЬНІСТЬ ЛІКАРЯ: Тільки "лікар-психіатр, нарколог". Слово "психотерапевт" КАТЕГОРИЧНО НЕ вживати ніде!
 2. ВРАХУВАННЯ ПАЦІЄНТА ТА ПОПЕРЕДНЬОГО АНАМНЕЗУ (PATIENT CONTEXT):
    - Якщо вказано ПІБ пацієнта (patientContext.fullName), використати його як єдине справжнє ім'я.
    - Якщо вказано дату народження (patientContext.dob), обчислити вік пацієнта та записати у форматі "ХХ років (ДД.ММ.РРРР)".
-   - Якщо надано попередній анамнез життя (patientContext.pastHistory), безпосередньо вплести його у розділ "6. Анамнез життя" (form028.anamnesisVitaeSection).
-   - Якщо patientContext.pastHistory НЕ надано, записати: "У записі не зазначено (зі слів пацієнта)".
+   - Розділ "6. Анамнез життя" (form028.anamnesisVitaeSection): якщо надано попередній анамнез життя (patientContext.pastHistory), перенести його дослівно, а потім додати відомості про життя пацієнта зі стенограми, яких у ньому ще немає.
+   - Якщо ні patientContext.pastHistory, ні відомостей про життя пацієнта у стенограмі немає, записати: "У записі не зазначено (зі слів пацієнта)".
 
 3. ПСИХОМЕТРИЧНІ ШКАЛИ (ТЕСТИ З БОТА):
    - Якщо надано результати психометричних шкал (PHQ-9, GAD-7, ASRS-6, AUDIT, ASRM тощо), обов'язково інтегрувати їх окремим пунктом в розділ 7 "Об'єктивний статус" (form028.objectiveStatusSection):
@@ -588,18 +413,68 @@ const CLINICAL_SYSTEM_INSTRUCTION = `
 
 4. РЕЖИМ ПОВТОРНОГО ПРИЙОМУ (ДИНАМІКА СТАНУ ТА ТЕРАПІЇ):
    - Якщо тип консультації "повторна" або надано дані попередньої терапії:
-     * Оцінити терапевтичну динаміку: редукцію тривоги (у %), нормалізацію сну, переносимість ліків та побічні ефекти.
+     * Описати динаміку так, як її описали пацієнт і лікар: тривога, сон, переносимість ліків, побічні ефекти. Відсотків, балів та інших кількісних оцінок, яких немає у вхідних даних, не вигадувати.
      * В "Анамнез захворювання" (form028.anamnesisMorbiSection) окремо описати: "Динаміка стану на тлі терапії...".
-     * В "Рекомендації" (form028.recommendationsSection) клінічно обґрунтувати корекцію дози, ескалацію, заміну препарату або продовження підтримуючого курсу.
+     * В "Рекомендації" (form028.recommendationsSection) внести лише ті зміни терапії, які назвав лікар: корекцію дози, заміну препарату або продовження курсу.
 
 5. МКХ-10 ТА РЕКОМЕНДАЦІЇ:
-   - Вказати точний код за МКХ-10 (наприклад F41.2, F41.0, F41.1, F43.2, F32.1 тощо) та повну офіційну клінічну назву.
-   - Рекомендації: режим, психоосвіта, психогігієна сну, психофармакотерапія з точним зазначенням доз і схеми титрації (вранці/ввечері).
+   - Вказати точний код за МКХ-10 (наприклад F41.2, F41.0, F41.1, F43.2, F32.1 тощо) та повну офіційну клінічну назву. Якщо лікар назвав діагноз, використати саме його.
+   - Рекомендації: режим, психоосвіта, психогігієна сну, психофармакотерапія. Препарати, дози та схему прийому (вранці/ввечері) вказувати лише ті, що лікар назвав у стенограмі або примітках. Якщо лікар дозу не назвав, дозу не вказувати.
 
 6. СТАНДАРТИ МОЗ УКРАЇНИ (028/о, 002/тм, 027/о):
    - Якщо лабораторних даних не було: "На момент консультації даних лабораторних та інструментальних досліджень не надано."
    - Внизу документа залишається виключно місце для печатки (М. П.) без рядка ручного підпису.
 `;
+
+// Doctor-entered data wins over the model's reading of the transcript
+function applyConsultationContext(
+  parsed: any,
+  { patientContext, priorConsultationHistory, psychometrics, isFollowUp, followUpData }: {
+    patientContext: any;
+    priorConsultationHistory: any;
+    psychometrics: string;
+    isFollowUp: boolean;
+    followUpData: any;
+  }
+) {
+  const form = parsed.form028;
+
+  if (patientContext.fullName) {
+    parsed.patient.fullName = patientContext.fullName;
+  } else if (priorConsultationHistory?.patientName) {
+    parsed.patient.fullName = priorConsultationHistory.patientName;
+  }
+
+  if (patientContext.dob) {
+    parsed.patient.age = formatAgeWithDob(patientContext.dob);
+  } else if (priorConsultationHistory?.dob) {
+    parsed.patient.age = formatAgeWithDob(priorConsultationHistory.dob);
+  }
+
+  const knownLifeHistory = String(patientContext.pastHistory || priorConsultationHistory?.anamnesisVitae || '').trim();
+  const modelLifeHistory = String(form.anamnesisVitaeSection || '').trim();
+  const sameText = (a: string, b: string) => a.replace(/\s+/g, ' ').includes(b.replace(/\s+/g, ' '));
+  if (knownLifeHistory && !sameText(modelLifeHistory, knownLifeHistory)) {
+    const fromConversation = modelLifeHistory.includes('У записі не зазначено') ? '' : modelLifeHistory;
+    form.anamnesisVitaeSection = [knownLifeHistory, fromConversation].filter(Boolean).join('\n');
+  } else if (!modelLifeHistory) {
+    form.anamnesisVitaeSection = 'У записі не зазначено (зі слів пацієнта)';
+  }
+
+  if (parsed.patient.fullName && (!form.patientSection || form.patientSection.includes('Не зазначено'))) {
+    form.patientSection = `${parsed.patient.fullName}, ${parsed.patient.age || ''}`.trim();
+  }
+
+  const objectiveStatus = String(form.objectiveStatusSection || '');
+  if (psychometrics && !objectiveStatus.includes('Психометричн')) {
+    form.objectiveStatusSection = `${objectiveStatus}\nПсихометричне обстеження (шкали): ${psychometrics}.`.trim();
+  }
+
+  const anamnesisMorbi = String(form.anamnesisMorbiSection || '');
+  if (isFollowUp && followUpData.previousTherapyAndState && !anamnesisMorbi.includes('Динаміка')) {
+    form.anamnesisMorbiSection = `${anamnesisMorbi}\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`.trim();
+  }
+}
 
 // Extract Endpoint with robust Model Cascade
 app.post('/api/extract', async (req: Request, res: Response) => {
@@ -650,6 +525,7 @@ app.post('/api/extract', async (req: Request, res: Response) => {
       : 'У записі не зазначено (зі слів пацієнта)';
 
     const isFollowUp = followUpData.consultationType === 'повторна' || Boolean(priorConsultationHistory);
+    const consultationContext = { patientContext, priorConsultationHistory, psychometrics, isFollowUp, followUpData };
 
     const prompt = `
 ВХІДНІ КЛІНІЧНІ ДАНІ ТА КОНТЕКСТ:
@@ -667,9 +543,7 @@ app.post('/api/extract', async (req: Request, res: Response) => {
 КАРТКА ПАЦІЄНТА (PATIENT CONTEXT):
 - ПІБ: ${patientContext.fullName || 'Визначити зі стенограми або метаданих'}
 - Дата народження: ${patientContext.dob || 'Не зазначено'} (Розрахований вік: ${calculatedAge})
-- Попередній анамнез життя (для розділу 6): ${
-        patientContext.pastHistory || 'У записі не зазначено (зі слів пацієнта)'
-      }
+- Попередній анамнез життя (для розділу 6): ${patientContext.pastHistory || 'Не надано'}
 
 РЕЖИМ КОНСУЛЬТАЦІЇ:
 - Вид: ${isFollowUp ? 'ПОВТОРНА (Оцінка терапевтичної динаміки)' : 'ПЕРВИННА'}
@@ -725,32 +599,8 @@ ${processedText.slice(0, 80000)}
           userPrompt: prompt,
         });
 
-        if (parsed && parsed.form028) {
-          if (patientContext.fullName && parsed.patient) {
-            parsed.patient.fullName = patientContext.fullName;
-          } else if (priorConsultationHistory?.patientName && parsed.patient) {
-            parsed.patient.fullName = priorConsultationHistory.patientName;
-          }
-
-          if (patientContext.dob && parsed.patient) {
-            parsed.patient.age = formatAgeWithDob(patientContext.dob);
-          } else if (priorConsultationHistory?.dob && parsed.patient) {
-            parsed.patient.age = formatAgeWithDob(priorConsultationHistory.dob);
-          } else if (calculatedAge && parsed.patient) {
-            parsed.patient.age = calculatedAge;
-          }
-
-          if (patientContext.pastHistory) {
-            parsed.form028.anamnesisVitaeSection = patientContext.pastHistory;
-          } else if (priorConsultationHistory?.anamnesisVitae) {
-            parsed.form028.anamnesisVitaeSection = priorConsultationHistory.anamnesisVitae;
-          }
-          if (psychometrics && !parsed.form028.objectiveStatusSection.includes('Психометричн')) {
-            parsed.form028.objectiveStatusSection += `\nПсихометричне обстеження (шкали): ${psychometrics}.`;
-          }
-          if (isFollowUp && followUpData.previousTherapyAndState && !parsed.form028.anamnesisMorbiSection.includes('Динаміка')) {
-            parsed.form028.anamnesisMorbiSection += `\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`;
-          }
+        if (parsed && parsed.patient && parsed.form028) {
+          applyConsultationContext(parsed, consultationContext);
 
           console.log(`[AI Extract] Success with ${provider} (${modelName})`);
           return res.json({
@@ -892,40 +742,7 @@ ${processedText.slice(0, 80000)}
             if (response.text) {
               const parsed = JSON.parse(response.text);
 
-              // Ensure patientContext is strictly applied, fallback to priorConsultationHistory
-              if (patientContext.fullName) {
-                parsed.patient.fullName = patientContext.fullName;
-              } else if (priorConsultationHistory?.patientName) {
-                parsed.patient.fullName = priorConsultationHistory.patientName;
-              }
-
-              if (patientContext.dob) {
-                parsed.patient.age = formatAgeWithDob(patientContext.dob);
-              } else if (priorConsultationHistory?.dob) {
-                parsed.patient.age = formatAgeWithDob(priorConsultationHistory.dob);
-              }
-
-              if (patientContext.pastHistory) {
-                parsed.form028.anamnesisVitaeSection = patientContext.pastHistory;
-              } else if (priorConsultationHistory?.anamnesisVitae) {
-                parsed.form028.anamnesisVitaeSection = priorConsultationHistory.anamnesisVitae;
-              } else if (!parsed.form028.anamnesisVitaeSection) {
-                parsed.form028.anamnesisVitaeSection = 'У записі не зазначено (зі слів пацієнта)';
-              }
-
-              if (parsed.patient?.fullName && (!parsed.form028.patientSection || parsed.form028.patientSection.includes('Не зазначено'))) {
-                parsed.form028.patientSection = `${parsed.patient.fullName}, ${parsed.patient.age || ''}`.trim();
-              }
-
-              // Weave psychometrics if not already included
-              if (psychometrics && !parsed.form028.objectiveStatusSection.includes('Психометричн')) {
-                parsed.form028.objectiveStatusSection += `\nПсихометричне обстеження (шкали): ${psychometrics}.`;
-              }
-
-              // If followUp data provided and not in anamnesisMorbi, append
-              if (isFollowUp && followUpData.previousTherapyAndState && !parsed.form028.anamnesisMorbiSection.includes('Динаміка')) {
-                parsed.form028.anamnesisMorbiSection += `\nДинаміка на тлі попередньої терапії: ${followUpData.previousTherapyAndState}.`;
-              }
+              applyConsultationContext(parsed, consultationContext);
 
               console.log(`[AI Extract] Success with ${currentModel}`);
               return res.json({
@@ -1141,238 +958,12 @@ function parseActualConsultationText(
   };
 }
 
-// Helper: Build standard DOCX Document supporting 028/о, 002/тм, 027/о
-function buildDocxDocument(form028: any, patient: any, formType: string = '028_o'): Document {
-  let mohHeader = 'Форма первинної облікової документації № 028/о\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 14.02.2012 № 110';
-  let docTitle = 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА';
-
-  if (formType === '002_tm') {
-    mohHeader = 'Форма первинної облікової документації № 002/тм\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 19.10.2015 № 681';
-    docTitle = 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)';
-  } else if (formType === '027_o') {
-    mohHeader = 'Форма первинної облікової документації № 027/о\nЗАТВЕРДЖЕНО\nНаказ МОЗ України 14.02.2012 № 110';
-    docTitle = 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО (СТАЦІОНАРНОГО) ХВОРОГО';
-  }
-
-  const paragraphs: Paragraph[] = [
-    new Paragraph({
-      text: 'МЕДИЧНА ДОКУМЕНТАЦІЯ',
-      alignment: AlignmentType.RIGHT,
-      spacing: { after: 40 },
-      children: [
-        new TextRun({
-          text: mohHeader,
-          size: 16,
-          font: 'Times New Roman',
-          italics: true,
-        }),
-      ],
-    }),
-
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 120, after: 80 },
-      children: [
-        new TextRun({
-          text: `${PRACTICE_INFO.practiceName}`,
-          bold: true,
-          size: 24,
-          font: 'Times New Roman',
-        }),
-      ],
-    }),
-
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 180 },
-      children: [
-        new TextRun({
-          text: `Медична практика: психіатрія, наркологія | ${PRACTICE_INFO.licenseNumber}\nЄДРПОУ: ${PRACTICE_INFO.edrpou} | ${PRACTICE_INFO.address}`,
-          size: 18,
-          font: 'Times New Roman',
-        }),
-      ],
-    }),
-
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 140, after: 180 },
-      children: [
-        new TextRun({
-          text: docTitle,
-          bold: true,
-          size: 26,
-          font: 'Times New Roman',
-        }),
-      ],
-    }),
-
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 200 },
-      children: [
-        new TextRun({
-          text: `№ ${form028.documentNumber || '2026/01'} від ${patient?.consultationDate || new Date().toLocaleDateString('uk-UA')}`,
-          bold: true,
-          size: 22,
-          font: 'Times New Roman',
-        }),
-      ],
-    }),
-  ];
-
-  if (formType === '027_o') {
-    paragraphs.push(
-      createFieldParagraph(
-        'В (найменування закладу, куди направляється): ',
-        form028.extractRecipient || '',
-        true
-      )
-    );
-  }
-
-  paragraphs.push(
-    createFieldParagraph(
-      formType === '027_o' ? '1. Прізвище, імʼя, по батькові хворого: ' : '1. Прізвище, імʼя, по батькові пацієнта: ',
-      patient?.fullName || form028.patientSection || 'Не вказано',
-      true
-    )
-  );
-
-  paragraphs.push(
-    createFieldParagraph(
-      '2. Вік / дата народження: ',
-      patient?.age || 'У записі не зазначено (зі слів пацієнта)',
-      false
-    )
-  );
-
-  paragraphs.push(
-    createFieldParagraph(
-      formType === '027_o' ? '3. Період нагляду / лікування: ' : '3. Вид консультації: ',
-      formType === '027_o'
-        ? form028.treatmentPeriod || `Консультація від ${patient?.consultationDate}`
-        : formType === '002_tm'
-        ? 'Телемедичне консультування (відеоконференцзв\'язок)'
-        : patient?.consultationType || '',
-      false
-    )
-  );
-
-  if (formType === '002_tm') {
-    paragraphs.push(
-      createFieldParagraph('Тривалість телемедичного сеансу: ', form028.telemedDuration || '', false)
-    );
-    paragraphs.push(
-      createFieldParagraph('Технічний засіб зв\'язку: ', form028.telemedChannel || '', false)
-    );
-  }
-
-  paragraphs.push(createFieldParagraph('4. Скарги хворого: ', form028.complaintsSection || '', false));
-  paragraphs.push(createFieldParagraph('5. Анамнез захворювання: ', form028.anamnesisMorbiSection || '', false));
-  paragraphs.push(createFieldParagraph('6. Анамнез життя: ', form028.anamnesisVitaeSection || 'У записі не зазначено (зі слів пацієнта)', false));
-  paragraphs.push(
-    createFieldParagraph(
-      '7. Дані обʼєктивного обстеження (соматичний, психічний статус та психометрія): ',
-      form028.objectiveStatusSection || '',
-      false
-    )
-  );
-  paragraphs.push(createFieldParagraph('8. Дані лабораторних та інструментальних досліджень: ', form028.laboratorySection || 'На момент консультації даних не надано.', false));
-
-  paragraphs.push(
-    new Paragraph({
-      spacing: { before: 140, after: 80 },
-      children: [
-        new TextRun({
-          text: '9. Діагноз (МКХ-10): ',
-          bold: true,
-          size: 22,
-          font: 'Times New Roman',
-        }),
-        new TextRun({
-          text: [form028.diagnosisCode, form028.diagnosisDescription].filter(Boolean).join(' '),
-          bold: true,
-          underline: {},
-          size: 22,
-          font: 'Times New Roman',
-        }),
-      ],
-    })
-  );
-
-  paragraphs.push(
-    createFieldParagraph(
-      formType === '027_o' ? '10. Лікувальні та трудові рекомендації: ' : '10. Рекомендації: ',
-      form028.recommendationsSection || '',
-      false
-    )
-  );
-  paragraphs.push(createFieldParagraph('11. Працездатність: ', form028.disabilityNote || '', false));
-  paragraphs.push(createFieldParagraph('12. Термін повторної явки: ', form028.nextAppointmentDate || '', false));
-
-  // ONLY circle for M.P. without signature line
-  paragraphs.push(
-    new Paragraph({
-      spacing: { before: 500, after: 100 },
-      alignment: AlignmentType.RIGHT,
-      children: [
-        new TextRun({
-          text: 'М. П.      ',
-          bold: true,
-          size: 24,
-          font: 'Times New Roman',
-        }),
-      ],
-    })
-  );
-
-  return new Document({
-    sections: [
-      {
-        properties: {
-          page: {
-            margin: {
-              top: 1134,
-              right: 850,
-              bottom: 1134,
-              left: 1417,
-            },
-          },
-        },
-        children: paragraphs,
-      },
-    ],
-  });
-}
-
-function createFieldParagraph(title: string, value: string, isBoldValue: boolean = false): Paragraph {
-  return new Paragraph({
-    spacing: { before: 80, after: 60 },
-    children: [
-      new TextRun({
-        text: title,
-        bold: true,
-        size: 22,
-        font: 'Times New Roman',
-      }),
-      new TextRun({
-        text: value,
-        bold: isBoldValue,
-        size: 22,
-        font: 'Times New Roman',
-      }),
-    ],
-  });
-}
-
 // DOCX Download Endpoint supporting 028/о, 002/тм, 027/о
 app.post('/api/export-docx', async (req: Request, res: Response) => {
   try {
     const { form028, patient, formType = '028_o' } = req.body;
     if (!form028) {
-      return res.status(400).json({ error: 'Дані форми відсутні' });
+      return res.status(400).json({ ok: false, error: 'Дані форми відсутні' });
     }
 
     const doc = buildDocxDocument(form028, patient, formType);
@@ -1386,12 +977,12 @@ app.post('/api/export-docx', async (req: Request, res: Response) => {
     );
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename=${prefix}${encodeURIComponent(patient?.fullName || 'Patient')}.docx`
+      `attachment; filename="${prefix}Patient.docx"; filename*=UTF-8''${encodeURIComponent(`${prefix}${patient?.fullName || 'Patient'}.docx`)}`
     );
     res.send(buffer);
   } catch (error: any) {
     console.error('DOCX export error:', error);
-    res.status(500).json({ error: error.message || 'Помилка генерації DOCX' });
+    res.status(500).json({ ok: false, error: errorText(error) });
   }
 });
 
@@ -1402,87 +993,78 @@ app.post('/api/send-telegram', async (req: Request, res: Response) => {
     const botToken = process.env.BOT_TOKEN;
     const adminId = process.env.ADMIN_ID;
 
+    if (!form028) {
+      return res.status(400).json({ ok: false, error: 'Дані форми відсутні' });
+    }
+    if (!botToken || !adminId) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Telegram не налаштовано: додайте BOT_TOKEN та ADMIN_ID у змінні середовища.',
+      });
+    }
+
     const patientName = patient?.fullName || 'Пацієнт';
     const consultationDate = patient?.consultationDate || new Date().toLocaleDateString('uk-UA');
 
-    if (botToken && adminId && form028) {
-      const doc = buildDocxDocument(form028, patient, formType);
-      const buffer = await Packer.toBuffer(doc);
+    const doc = buildDocxDocument(form028, patient, formType);
+    const buffer = await Packer.toBuffer(doc);
 
-      let formLabel = 'Форма № 028/о';
-      let captionIcon = '📋';
-      let titleWord = 'Консультативний висновок';
+    let formLabel = 'Форма № 028/о';
+    let captionIcon = '📋';
+    let titleWord = 'Консультативний висновок';
 
-      if (formType === '002_tm') {
-        formLabel = 'Форма № 002/тм';
-        captionIcon = '💻';
-        titleWord = 'Телемедичний висновок';
-      } else if (formType === '027_o') {
-        formLabel = 'Форма № 027/о';
-        captionIcon = '📑';
-        titleWord = 'Медична виписка';
-      }
-
-      const caption = `${captionIcon} ${titleWord} (${formLabel}) — ${patientName} від ${consultationDate}`;
-
-      const formData = new FormData();
-      formData.append('chat_id', adminId);
-      formData.append('caption', caption);
-
-      const fileBlob = new Blob([new Uint8Array(buffer)], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-      formData.append(
-        'document',
-        fileBlob,
-        `${titleWord.replace(/\s+/g, '_')}_${encodeURIComponent(patientName.replace(/\s+/g, '_'))}.docx`
-      );
-
-      console.log(`[Telegram] Sending document to chat ${adminId}...`);
-      const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      const tgJson: any = await tgRes.json();
-      if (tgJson.ok) {
-        return res.json({
-          ok: true,
-          sent: true,
-          message: `Документ DOCX (${formLabel}) для ${patientName} успішно надіслано у ваш Telegram!`,
-          tgMessageId: tgJson.result?.message_id,
-        });
-      } else {
-        console.warn('[Telegram API Error]', tgJson);
-        return res.json({
-          ok: true,
-          sent: false,
-          warning: tgJson.description || 'Помилка Telegram API',
-          message: `Telegram API повернув: ${tgJson.description || 'невідома помилка'}`,
-        });
-      }
+    if (formType === '002_tm') {
+      formLabel = 'Форма № 002/тм';
+      captionIcon = '💻';
+      titleWord = 'Телемедичний висновок';
+    } else if (formType === '027_o') {
+      formLabel = 'Форма № 027/о';
+      captionIcon = '📑';
+      titleWord = 'Медична виписка';
     }
 
-    res.json({
+    const caption = `${captionIcon} ${titleWord} (${formLabel}) — ${patientName} від ${consultationDate}`;
+
+    const formData = new FormData();
+    formData.append('chat_id', adminId);
+    formData.append('caption', caption);
+
+    const fileBlob = new Blob([new Uint8Array(buffer)], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    formData.append('document', fileBlob, `${titleWord}_${patientName}.docx`.replace(/\s+/g, '_'));
+
+    console.log(`[Telegram] Sending document to chat ${adminId}...`);
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const tgJson: any = await tgRes.json();
+    if (!tgJson.ok) {
+      console.warn('[Telegram API Error]', tgJson);
+      return res.status(502).json({
+        ok: false,
+        error: `Telegram не прийняв документ: ${tgJson.description || `код ${tgRes.status}`}`,
+      });
+    }
+
+    return res.json({
       ok: true,
-      sent: false,
-      simulated: true,
-      message: `Документ підготовлено. Для прямої доставки додайте BOT_TOKEN та ADMIN_ID у Secrets або файл .env`,
+      message: `Документ DOCX (${formLabel}) для ${patientName} успішно надіслано у ваш Telegram!`,
+      tgMessageId: tgJson.result?.message_id,
     });
   } catch (err: any) {
-    console.error('Telegram dispatch error:', err);
-    res.json({
-      ok: true,
-      sent: false,
-      message: `Висновок зафіксовано. Помилка зв'язку з Telegram: ${err.message}`,
-    });
+    const message = errorText(err);
+    console.error(`[Telegram] ${message}`);
+    return res.status(500).json({ ok: false, error: `Помилка зв'язку з Telegram: ${message}` });
   }
 });
 
 const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
-  if (process.env.NODE_ENV === 'production') {
+  if (isProduction) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
@@ -1495,7 +1077,9 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Without a password the app is reachable only from this computer.
+  const host = appPassword ? '0.0.0.0' : '127.0.0.1';
+  app.listen(PORT, host, () => {
     console.log(`Praxis Studio server running at http://localhost:${PORT}`);
   });
 }

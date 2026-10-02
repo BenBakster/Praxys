@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import {
   UploadCard,
@@ -9,6 +9,7 @@ import { FactsColumn } from './components/FactsColumn';
 import { MedicalDocumentA4 } from './components/MedicalDocumentA4';
 import { TelegramModal } from './components/TelegramModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
+import { LoginScreen } from './components/LoginScreen';
 import {
   ConsultationResult,
   Form028Data,
@@ -26,9 +27,14 @@ import {
   FileText,
   Video,
   FileCheck2,
+  AlertCircle,
 } from 'lucide-react';
 
+type ToastTone = 'success' | 'error';
+
 export default function App() {
+  const [authState, setAuthState] = useState<'checking' | 'login' | 'ready'>('checking');
+  const [authError, setAuthError] = useState<string | null>(null);
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => {
     try {
       const saved = localStorage.getItem('praxis_ai_config');
@@ -48,14 +54,24 @@ export default function App() {
   const [currentFileName, setCurrentFileName] = useState<string>('');
   const [telegramModalOpen, setTelegramModalOpen] = useState(false);
   const [telegramResponseMsg, setTelegramResponseMsg] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; tone: ToastTone } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    fetch('/api/session')
+      .then((response) => {
+        if (response.status === 401) setAuthState('login');
+        else if (response.ok) setAuthState('ready');
+        else throw new Error(`Сервер відповів кодом ${response.status}`);
+      })
+      .catch((err: Error) => setAuthError(err.message));
+  }, []);
+
   // Show Toast
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
+  const showToast = (msg: string, tone: ToastTone = 'success') => {
+    setToast({ text: msg, tone });
     setTimeout(() => {
-      setToastMessage(null);
+      setToast(null);
     }, 4500);
   };
 
@@ -136,7 +152,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('API extraction issue:', err);
-      showToast(`Помилка аналізу: ${err.message || 'Перевірте файл'}`);
+      showToast(`Помилка аналізу: ${err.message || 'Перевірте файл'}`, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -174,7 +190,10 @@ export default function App() {
         }),
       });
 
-      if (!response.ok) throw new Error('Помилка формування DOCX');
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || `Сервер відповів кодом ${response.status}`);
+      }
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -190,7 +209,7 @@ export default function App() {
       showToast(`Файл .docx (${formCode}) сформовано та завантажено!`);
     } catch (err: any) {
       console.error(err);
-      showToast('Не вдалося експортувати DOCX');
+      showToast(`Не вдалося експортувати DOCX: ${err.message}`, 'error');
     }
   };
 
@@ -211,16 +230,15 @@ export default function App() {
       });
 
       const data = await res.json();
-      setTelegramResponseMsg(data.message || 'Документ надіслано');
-      setTelegramModalOpen(true);
-      if (data.sent) {
-        showToast('Документ DOCX доставлено в особистий чат Telegram!');
-      } else {
-        showToast(data.message || 'Статус Telegram оновлено');
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `Сервер відповів кодом ${res.status}`);
       }
-    } catch (err: any) {
-      setTelegramResponseMsg(`Помилка відправки: ${err.message}`);
+      setTelegramResponseMsg(data.message);
       setTelegramModalOpen(true);
+      showToast('Документ DOCX доставлено в особистий чат Telegram!');
+    } catch (err: any) {
+      console.error('Telegram dispatch issue:', err);
+      showToast(`Telegram: ${err.message}`, 'error');
     }
   };
 
@@ -230,29 +248,45 @@ export default function App() {
     const doc = consultationData.form028;
     const p = consultationData.patient;
 
-    const formTitle =
-      currentFormType === '002_tm'
-        ? 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)'
-        : currentFormType === '027_o'
-        ? 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО ХВОРОГО'
-        : 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА';
+    const isTelemed = currentFormType === '002_tm';
+    const isExtract = currentFormType === '027_o';
+    const formTitle = isTelemed
+      ? 'ВИСНОВОК КОНСУЛЬТАНТА (ТЕЛЕМЕДИЦИНА)'
+      : isExtract
+      ? 'ВИПИСКА ІЗ МЕДИЧНОЇ КАРТИ АМБУЛАТОРНОГО (СТАЦІОНАРНОГО) ХВОРОГО'
+      : 'КОНСУЛЬТАТИВНИЙ ВИСНОВОК СПЕЦІАЛІСТА';
 
-    const fullText = `ФОП ВІЛЕНЧИК АНТОН ПАВЛОВИЧ
-Лікар-психіатр, нарколог
-Ліцензія МОЗ України № 854 від 17.05.2024 р.
-${formTitle} № ${doc.documentNumber} від ${p.consultationDate}
-1. Пацієнт: ${p.fullName}, ${p.age} (${p.consultationType})
-2. Скарги: ${doc.complaintsSection}
-3. Анамнез захворювання: ${doc.anamnesisMorbiSection}
-4. Анамнез життя: ${doc.anamnesisVitaeSection}
-5. Об'єктивний статус та психометрія: ${doc.objectiveStatusSection}
-6. Дослідження: ${doc.laboratorySection}
-7. Діагноз: [${doc.diagnosisCode}] ${doc.diagnosisDescription}
-8. Рекомендації:
-${doc.recommendationsSection}
-9. Працездатність: ${doc.disabilityNote}
-10. Повторна явка: ${doc.nextAppointmentDate}
-М. П.`;
+    const lines = [
+      'ФОП ВІЛЕНЧИК АНТОН ПАВЛОВИЧ',
+      'Медична практика: психіатрія, наркологія',
+      'Ліцензія МОЗ України: Наказ МОЗ № 854 від 17.05.2024 р.',
+      `${formTitle} № ${doc.documentNumber} від ${p.consultationDate}`,
+    ];
+    if (isExtract) lines.push(`В (найменування закладу / за місцем вимоги): ${doc.extractRecipient || ''}`);
+    lines.push(`1. Прізвище, ім'я, по батькові ${isExtract ? 'хворого' : 'пацієнта'}: ${p.fullName}`);
+    lines.push(`2. Вік / дата народження: ${p.age}`);
+    lines.push(
+      isExtract
+        ? `3. Період нагляду / лікування: ${doc.treatmentPeriod || `Консультація від ${p.consultationDate}`}`
+        : `3. Вид консультації: ${isTelemed ? "Телемедичне консультування (відеозв'язок)" : p.consultationType}`
+    );
+    if (isTelemed) {
+      lines.push(`Тривалість сеансу: ${doc.telemedDuration || ''}`);
+      lines.push(`Засіб зв'язку: ${doc.telemedChannel || ''}`);
+    }
+    lines.push(`${isExtract ? '4. Скарги при зверненні' : '4. Скарги хворого'}: ${doc.complaintsSection}`);
+    lines.push(
+      `${isExtract ? '5. Короткий анамнез та перебіг захворювання (динаміка)' : '5. Анамнез захворювання'}: ${doc.anamnesisMorbiSection}`
+    );
+    lines.push(`6. Анамнез життя: ${doc.anamnesisVitaeSection}`);
+    lines.push(`7. Дані об'єктивного обстеження (психічний, соматичний статус та психометрія): ${doc.objectiveStatusSection}`);
+    lines.push(`8. Дані лабораторних та інструментальних досліджень: ${doc.laboratorySection}`);
+    lines.push(`9. Діагноз (МКХ-10): ${[doc.diagnosisCode, doc.diagnosisDescription].filter(Boolean).join(' ')}`);
+    lines.push(`${isExtract ? '10. Лікувальні та трудові рекомендації' : '10. Рекомендації'}:\n${doc.recommendationsSection}`);
+    lines.push(`11. Працездатність: ${doc.disabilityNote}`);
+    lines.push(`12. Повторна явка / контроль: ${doc.nextAppointmentDate}`);
+    lines.push('М. П.');
+    const fullText = lines.join('\n');
 
     navigator.clipboard.writeText(fullText);
     setCopied(true);
@@ -277,6 +311,16 @@ ${doc.recommendationsSection}
       patient: { ...consultationData.patient, ...updated },
     });
   };
+
+  if (authError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 text-sm text-red-600">
+        Сервер недоступний: {authError}
+      </div>
+    );
+  }
+  if (authState === 'checking') return null;
+  if (authState === 'login') return <LoginScreen onSuccess={() => setAuthState('ready')} />;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-[#1F1F1F]">
@@ -421,10 +465,14 @@ ${doc.recommendationsSection}
       </main>
 
       {/* Floating Toast notification */}
-      {toastMessage && (
+      {toast && (
         <div className="fixed bottom-6 right-6 z-50 no-print flex items-center gap-2.5 px-4 py-3 bg-gray-900 text-white text-xs font-medium rounded-xl shadow-xl animate-in slide-in-from-bottom-3 duration-200">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMessage}</span>
+          {toast.tone === 'error' ? (
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+          ) : (
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          )}
+          <span>{toast.text}</span>
         </div>
       )}
 

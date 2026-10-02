@@ -1,19 +1,23 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Praxis Студія
 
-# Run and deploy your AI Studio app
+Формує медичні висновки за записом консультації лікаря-психіатра, нарколога: форми № 028/о, 002/тм та 027/о.
+Друк / PDF, DOCX і надсилання DOCX у Telegram лікаря.
 
-This contains everything you need to run your app locally.
-https://ai.studio/apps/bd1b1f9a-bb61-4a9b-9b24-0dda9e2caec5
+## Локальний запуск
 
-## Run Locally
+1. `npm install`
+2. Скопіювати `.env.example` у `.env` і вписати `GEMINI_API_KEY`.
+3. `npm run dev` або `./запустити_praxis.sh` — програма відкривається на http://localhost:3000.
 
-**Prerequisites:**  Node.js
+Без `APP_PASSWORD` програма доступна лише з цього комп'ютера. Якщо пароль задано, вона просить його при вході.
 
+## Railway
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Збирання `npm run build`, запуск `npm run start` (див. `railway.json`).
+- Змінні середовища: `GEMINI_API_KEY`, `APP_PASSWORD` (обов'язково, від 8 символів), `BOT_TOKEN`, `ADMIN_ID`.
+- Без `APP_PASSWORD` сервер у робочому режимі не запускається.
+
+## Перевірки
+
+- `npm run lint` — перевірка типів.
+- `npm test` — розбір попередніх висновків і вигляд DOCX.
